@@ -1,8 +1,10 @@
 [package]
 name = "current_dir"
 version = "0.1.0"
+description = "Thread Safe Current Working Directory"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+repository = "https://github.com/G-M0N3Y-2503/current_dir"
+license-file = "LICENSE"
+readme = "README.md"
+keywords = ["async", "cwd", "filesystem", "test", "thread"]
+categories = ["concurrency", "development-tools::testing", "filesystem"]

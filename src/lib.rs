@@ -1,7 +1,29 @@
-//! The current directory is global to the whole process. So each [`ScopedCurrentWorkingDirectory`] uses
-//! a lock so that they are accurate within the scope.
-//! [`ScopedCurrentWorkingDirectory`] assumes that no other calls to [`std::env::set_current_dir()`] are
-//! made elsewhere.
+#![warn(
+    clippy::cargo,
+    clippy::pedantic,
+    clippy::restriction, // Easier to maintain an allow list for the time being
+    clippy::nursery,
+    missing_docs,
+    rustdoc::all,
+)]
+#![allow(
+    clippy::blanket_clippy_restriction_lints,
+    clippy::implicit_return,
+    clippy::question_mark_used,
+    clippy::single_call_fn, // Can't seem to override at instance
+)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![doc(test(attr(
+    deny(warnings),
+    deny(
+        clippy::cargo,
+        clippy::pedantic,
+        clippy::restriction, // Easier to maintain an allow list for the time being
+        clippy::nursery,
+        rustdoc::all,
+    )
+)))]
+#![doc = include_str!("../README.md")]
 
 use std::{
     env, io,
@@ -9,8 +31,33 @@ use std::{
     sync::Mutex,
 };
 
+pub mod aliases;
+pub mod scoped;
+
+/// Wrapper functions for [`env::set_current_dir()`] and [`env::current_dir()`] with [`Self`] borrowed.
+/// This is only implemented on types that have a reference to [`CurrentWorkingDirectory::mutex()`].
+pub trait CurrentWorkingDirectoryAccessor: private::Sealed {
+    #![allow(clippy::missing_errors_doc)]
+
+    /// Wrapper function to ensure [`env::current_dir()`] is called with [`Self`] borrowed.
+    fn get(&self) -> io::Result<PathBuf> {
+        env::current_dir()
+    }
+
+    /// Wrapper function to ensure [`env::set_current_dir()`] is called with [`Self`] borrowed.
+    fn set<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
+        env::set_current_dir(path)
+    }
+}
+mod private {
+    pub trait Sealed {}
+    impl Sealed for super::CurrentWorkingDirectory {}
+    impl Sealed for super::scoped::CurrentWorkingDirectory<'_> {}
+}
+
 static CWD_MUTEX: Mutex<CurrentWorkingDirectory> = Mutex::new(CurrentWorkingDirectory::new());
 
+/// Wrapper type to help the usage of the current working directory for the process.
 pub struct CurrentWorkingDirectory {
     scope_stack: Vec<PathBuf>,
 }
@@ -24,18 +71,9 @@ impl CurrentWorkingDirectory {
     /// The [`Mutex`] ensuring the state of the current working directory.
     ///
     /// It is a logic error to call [`env::set_current_dir()`] or [`env::current_dir()`] without this lock acquired.
-    pub fn mutex() -> &'static Mutex<CurrentWorkingDirectory> {
+    #[must_use]
+    pub fn mutex() -> &'static Mutex<Self> {
         &CWD_MUTEX
-    }
-
-    /// Wrapper function to ensure [`env::current_dir()`] is called with the locked [`Self`].
-    pub fn get(&self) -> io::Result<PathBuf> {
-        env::current_dir()
-    }
-
-    /// Wrapper function to ensure [`env::set_current_dir()`] is called with the locked [`Self`].
-    pub fn set<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        env::set_current_dir(path)
     }
 
     fn push_scope(&mut self) -> io::Result<()> {
@@ -44,23 +82,34 @@ impl CurrentWorkingDirectory {
     }
 
     fn pop_scope(&mut self) -> io::Result<Option<PathBuf>> {
-        if let Some(previous) = self.scope_stack.last() {
-            self.set(previous)?;
+        match self.scope_stack.pop() {
+            Some(previous) => match self.set(&previous) {
+                Ok(_) => Ok(Some(previous)),
+                Err(err) => {
+                    self.scope_stack.push(previous);
+                    Err(err)
+                }
+            },
+            None => Ok(None),
         }
-        Ok(self.scope_stack.pop())
     }
 
-    /// Creates a [`ScopedCurrentWorkingDirectory`] mutably borrowing the locked [`Self`].
-    pub fn scoped(&mut self) -> io::Result<ScopedCurrentWorkingDirectory<'_>> {
-        ScopedCurrentWorkingDirectory::new_scoped(self)
+    /// Creates a [`scoped::CurrentWorkingDirectory`] mutably borrowing the locked [`Self`].
+    ///
+    /// # Errors
+    /// The current directory cannot be retrieved as per [`env::current_dir()`]
+    pub fn scoped(&mut self) -> io::Result<scoped::CurrentWorkingDirectory<'_>> {
+        scoped::CurrentWorkingDirectory::new_scoped(self)
     }
 
-    pub fn drain_scoped(&mut self) -> &mut Vec<PathBuf> {
-        &mut self.scope_stack
-    }
+    // fn drain_scoped(&mut self) -> &mut Vec<PathBuf> {
+    //     &mut self.scope_stack
+    // }
 }
+#[allow(clippy::missing_trait_methods)]
+impl CurrentWorkingDirectoryAccessor for CurrentWorkingDirectory {}
 impl<'locked_cwd> TryFrom<&'locked_cwd mut CurrentWorkingDirectory>
-    for ScopedCurrentWorkingDirectory<'locked_cwd>
+    for scoped::CurrentWorkingDirectory<'locked_cwd>
 {
     type Error = io::Error;
 
@@ -72,73 +121,25 @@ impl<'locked_cwd> TryFrom<&'locked_cwd mut CurrentWorkingDirectory>
     }
 }
 
-/// A Scoped version of [`CurrentWorkingDirectory`] that can later be [`reset()`][reset] to the current working directory at the time of this call.
-///
-/// [`reset()`][reset] will be called automatically on [`drop()`][drop].
-///
-/// [reset]: Self::reset()
-/// [drop]: Self::drop()
-pub struct ScopedCurrentWorkingDirectory<'locked_cwd> {
-    locked_cwd: &'locked_cwd mut CurrentWorkingDirectory,
-    has_reset: bool,
-}
-impl<'locked_cwd> ScopedCurrentWorkingDirectory<'locked_cwd> {
-    fn new_scoped(locked_cwd: &'locked_cwd mut CurrentWorkingDirectory) -> io::Result<Self> {
-        locked_cwd.push_scope()?;
-        Ok(Self {
-            locked_cwd,
-            has_reset: false,
-        })
-    }
-
-    pub fn new(&mut self) -> io::Result<ScopedCurrentWorkingDirectory> {
-        ScopedCurrentWorkingDirectory::new_scoped(self.locked_cwd)
-    }
-
-    pub fn reset(&mut self) -> io::Result<Option<PathBuf>> {
-        if !self.has_reset {
-            if let Some(reset_to) = self.locked_cwd.pop_scope()? {
-                self.has_reset = true;
-                return Ok(Some(reset_to));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Wrapper function to ensure [`env::current_dir()`] is called with the locked [`CurrentWorkingDirectory`] borrowed.
-    pub fn get(&self) -> io::Result<PathBuf> {
-        self.locked_cwd.get()
-    }
-
-    /// Wrapper function to ensure [`env::set_current_dir()`] is called with the locked [`CurrentWorkingDirectory`] borrowed.
-    pub fn set<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        self.locked_cwd.set(path)
-    }
-}
-impl Drop for ScopedCurrentWorkingDirectory<'_> {
-    fn drop(&mut self) {
-        if !self.has_reset {
-            self.reset()
-                .expect("current working directory can be set")
-                .expect("ScopedCurrentWorkingDirectory was created with somewhere to reset to");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[allow(clippy::significant_drop_tightening)] // false positive
     #[test]
     fn test() {
-        let mut cwd = CurrentWorkingDirectory::mutex().lock().unwrap();
+        use super::aliases::*;
+
+        let mut cwd = Cwd::mutex().lock().unwrap();
+        cwd.set(env::temp_dir()).unwrap();
+
         let mut scoped_cwd = cwd.scoped().unwrap();
         scoped_cwd.set(env::temp_dir()).unwrap();
 
-        let mut scoped_cwd = ScopedCurrentWorkingDirectory::new(&mut scoped_cwd).unwrap();
-        scoped_cwd.set(env::temp_dir()).unwrap();
+        let mut sub_scoped_cwd = ScopedCwd::new(&mut scoped_cwd).unwrap();
+        sub_scoped_cwd.set(env::temp_dir()).unwrap();
 
-        let scoped_cwd = scoped_cwd.new().unwrap();
-        scoped_cwd.set(env::temp_dir()).unwrap();
+        let mut sub_sub_scoped_cwd = sub_scoped_cwd.new().unwrap();
+        sub_sub_scoped_cwd.set(env::temp_dir()).unwrap();
     }
 }
