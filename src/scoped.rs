@@ -2,6 +2,41 @@
 
 use super::*;
 
+#[derive(Debug)]
+pub struct ScopeStack {
+    scope_stack: Vec<PathBuf>,
+}
+impl super::CurrentWorkingDirectoryAccessor for ScopeStack {}
+impl ScopeStack {
+    pub(super) const fn new() -> Self {
+        Self {
+            scope_stack: Vec::new(),
+        }
+    }
+
+    pub fn push_scope(&mut self) -> io::Result<()> {
+        self.scope_stack.push(self.get()?);
+        Ok(())
+    }
+
+    pub fn pop_scope(&mut self) -> io::Result<Option<PathBuf>> {
+        match self.scope_stack.pop() {
+            Some(previous) => match self.set(&previous) {
+                Ok(_) => Ok(Some(previous)),
+                Err(err) => {
+                    self.scope_stack.push(previous);
+                    Err(err)
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
+    pub fn as_vec(&mut self) -> &mut Vec<PathBuf> {
+        &mut self.scope_stack
+    }
+}
+
 /// A Scoped version of [`CurrentWorkingDirectory`] that will [`reset()`][reset] the current working directory to it's previous state.
 ///
 /// [`reset()`][reset] will be called automatically on [`drop()`][drop] or manually to handle errors at any time.
@@ -16,7 +51,7 @@ impl CurrentWorkingDirectory<'_> {
     pub(super) fn new_scoped(
         locked_cwd: &mut super::CurrentWorkingDirectory,
     ) -> io::Result<CurrentWorkingDirectory> {
-        locked_cwd.push_scope()?;
+        locked_cwd.scope_stack.push_scope()?;
         Ok(CurrentWorkingDirectory {
             locked_cwd,
             has_reset: false,
@@ -40,7 +75,7 @@ impl CurrentWorkingDirectory<'_> {
     /// The current directory cannot be set as per [`env::set_current_dir()`]
     pub fn reset(&mut self) -> io::Result<Option<PathBuf>> {
         if !self.has_reset {
-            if let Some(reset_to) = self.locked_cwd.pop_scope()? {
+            if let Some(reset_to) = self.locked_cwd.scope_stack.pop_scope()? {
                 self.has_reset = true;
                 return Ok(Some(reset_to));
             }

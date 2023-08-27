@@ -33,10 +33,11 @@ use std::{
 
 pub mod aliases;
 pub mod scoped;
+mod sealed;
 
 /// Wrapper functions for [`env::set_current_dir()`] and [`env::current_dir()`] with [`Self`] borrowed.
 /// This is only implemented on types that have a reference to [`CurrentWorkingDirectory::mutex()`].
-pub trait CurrentWorkingDirectoryAccessor: private::Sealed {
+pub trait CurrentWorkingDirectoryAccessor: sealed::Sealed {
     #![allow(clippy::missing_errors_doc)]
 
     /// Wrapper function to ensure [`env::current_dir()`] is called with [`Self`] borrowed.
@@ -49,22 +50,18 @@ pub trait CurrentWorkingDirectoryAccessor: private::Sealed {
         env::set_current_dir(path)
     }
 }
-mod private {
-    pub trait Sealed {}
-    impl Sealed for super::CurrentWorkingDirectory {}
-    impl Sealed for super::scoped::CurrentWorkingDirectory<'_> {}
-}
 
 static CWD_MUTEX: Mutex<CurrentWorkingDirectory> = Mutex::new(CurrentWorkingDirectory::new());
 
 /// Wrapper type to help the usage of the current working directory for the process.
+#[derive(Debug)]
 pub struct CurrentWorkingDirectory {
-    scope_stack: Vec<PathBuf>,
+    scope_stack: scoped::ScopeStack,
 }
 impl CurrentWorkingDirectory {
     const fn new() -> Self {
         Self {
-            scope_stack: Vec::new(),
+            scope_stack: scoped::ScopeStack::new(),
         }
     }
 
@@ -76,24 +73,6 @@ impl CurrentWorkingDirectory {
         &CWD_MUTEX
     }
 
-    fn push_scope(&mut self) -> io::Result<()> {
-        self.scope_stack.push(self.get()?);
-        Ok(())
-    }
-
-    fn pop_scope(&mut self) -> io::Result<Option<PathBuf>> {
-        match self.scope_stack.pop() {
-            Some(previous) => match self.set(&previous) {
-                Ok(_) => Ok(Some(previous)),
-                Err(err) => {
-                    self.scope_stack.push(previous);
-                    Err(err)
-                }
-            },
-            None => Ok(None),
-        }
-    }
-
     /// Creates a [`scoped::CurrentWorkingDirectory`] mutably borrowing the locked [`Self`].
     ///
     /// # Errors
@@ -102,9 +81,46 @@ impl CurrentWorkingDirectory {
         scoped::CurrentWorkingDirectory::new_scoped(self)
     }
 
-    // fn drain_scoped(&mut self) -> &mut Vec<PathBuf> {
-    //     &mut self.scope_stack
-    // }
+    /// Access to the stack of scopes used by [`scoped::CurrentWorkingDirectory`].</br>
+    /// This is only useful for cleaning up if the [`Mutex`] if it was poisoned.
+    ///
+    /// ```
+    /// # let test_dir = env::temp_dir().join(concat!(module_path!(), "cwd_poisoned"));
+    /// # if !test_dir.exists() {
+    /// #     fs::create_dir(&test_dir)?;
+    /// # }
+    /// #
+    ///   use current_dir::aliases::*;
+    ///   use std::{env, error::Error, fs, thread};
+    ///
+    ///   let test_dir_copy = test_dir.clone();
+    ///   thread::spawn(|| -> Result<(), Box<dyn Error + Send + Sync>> {
+    ///       let mut locked_cwd = Cwd::mutex().lock().unwrap();
+    ///       locked_cwd.set(&test_dir_copy)?;
+    ///       let _scope_locked_cwd = locked_cwd.scoped()?;
+    ///
+    ///       // delete scoped cwd reset dir
+    ///       fs::remove_dir(test_dir_copy)?;
+    ///
+    ///       Ok(())
+    ///   })
+    ///   .join()
+    ///   .expect_err("thread panicked");
+    ///
+    ///   let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
+    ///   let poisoned_scope_stack = poisoned_locked_cwd.get_mut().scope_stack();
+    ///   assert_eq!(*poisoned_scope_stack.as_vec(), vec![test_dir.clone()]);
+    ///
+    ///   // Fix poisoned cwd
+    ///   fs::create_dir(test_dir)?;
+    ///   poisoned_scope_stack.pop_scope()?;
+    ///   let _locked_cwd = poisoned_locked_cwd.into_inner();
+    ///
+    /// # Ok::<_, Box<dyn Error>>(())
+    /// ```
+    pub fn scope_stack(&mut self) -> &mut scoped::ScopeStack {
+        &mut self.scope_stack
+    }
 }
 #[allow(clippy::missing_trait_methods)]
 impl CurrentWorkingDirectoryAccessor for CurrentWorkingDirectory {}
@@ -127,19 +143,60 @@ mod tests {
 
     #[allow(clippy::significant_drop_tightening)] // false positive
     #[test]
-    fn test() {
+    fn recursive_scopes() {
         use super::aliases::*;
 
         let mut cwd = Cwd::mutex().lock().unwrap();
+        let initial_cwd = cwd.get().unwrap();
         cwd.set(env::temp_dir()).unwrap();
 
-        let mut scoped_cwd = cwd.scoped().unwrap();
-        scoped_cwd.set(env::temp_dir()).unwrap();
+        {
+            let mut scoped_cwd = cwd.scoped().unwrap();
+            scoped_cwd.set(env::temp_dir()).unwrap();
 
-        let mut sub_scoped_cwd = ScopedCwd::new(&mut scoped_cwd).unwrap();
-        sub_scoped_cwd.set(env::temp_dir()).unwrap();
+            let mut sub_scoped_cwd = ScopedCwd::new(&mut scoped_cwd).unwrap();
+            sub_scoped_cwd.set(env::temp_dir()).unwrap();
 
-        let mut sub_sub_scoped_cwd = sub_scoped_cwd.new().unwrap();
-        sub_sub_scoped_cwd.set(env::temp_dir()).unwrap();
+            let mut sub_sub_scoped_cwd = sub_scoped_cwd.new().unwrap();
+            sub_sub_scoped_cwd.set(env::temp_dir()).unwrap();
+        }
+
+        cwd.set(initial_cwd).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "current working directory can be set: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }"
+    )]
+    fn clean_up_poisend() {
+        use crate::aliases::*;
+        use std::{env, fs, panic, thread};
+
+        let test_dir = env::temp_dir().join(concat!(module_path!(), "clean_up_poisend"));
+        if !test_dir.exists() {
+            fs::create_dir(&test_dir).unwrap();
+        }
+
+        let thread_test_dir_copy = test_dir.clone();
+        let thread_result = thread::spawn(|| {
+            let mut locked_cwd = Cwd::mutex().lock().unwrap();
+            locked_cwd.set(&thread_test_dir_copy).unwrap();
+            let _scope_locked_cwd = locked_cwd.scoped().unwrap();
+
+            // delete scoped cwd reset dir
+            fs::remove_dir(thread_test_dir_copy).unwrap();
+        })
+        .join();
+
+        let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
+        let poisoned_scope_stack = poisoned_locked_cwd.get_mut().scope_stack();
+        assert_eq!(*poisoned_scope_stack.as_vec(), vec![test_dir.clone()]);
+
+        // Fix poisoned cwd
+        fs::create_dir(&test_dir).unwrap();
+        assert_eq!(poisoned_scope_stack.pop_scope().unwrap(), Some(test_dir));
+        let _locked_cwd = poisoned_locked_cwd.into_inner();
+
+        panic::resume_unwind(thread_result.expect_err("thread panicked"));
     }
 }
