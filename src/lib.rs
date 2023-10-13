@@ -34,7 +34,7 @@ use std::{
 pub mod aliases;
 pub mod scoped;
 mod sealed;
-pub mod test_utils;
+pub mod test_utilities;
 
 /// Wrapper functions for [`env::set_current_dir()`] and [`env::current_dir()`] with [`Self`] borrowed.
 /// This is only implemented on types that have a reference to [`CurrentWorkingDirectory::mutex()`].

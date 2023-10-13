@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn recursive_scopes() {
         let mut locked_cwd =
-            test_utils::yield_poison_fixed(Cwd::mutex(), Duration::from_millis(500))
+            test_utilities::yield_poison_fixed(Cwd::mutex(), Duration::from_millis(500))
                 .expect("no test failed to clean up poison");
         let initial_cwd = locked_cwd.get().unwrap();
         locked_cwd.set(env::temp_dir()).unwrap();
@@ -112,7 +112,7 @@ mod tests {
         let test_res = thread::scope(|s| {
             s.spawn(|| {
                 let mut locked_cwd =
-                    test_utils::yield_poison_fixed(Cwd::mutex(), Duration::from_millis(500))
+                    test_utilities::yield_poison_fixed(Cwd::mutex(), Duration::from_millis(500))
                         .expect("no test failed to clean up poison");
 
                 initial_cwd.set(locked_cwd.get().unwrap()).unwrap();
