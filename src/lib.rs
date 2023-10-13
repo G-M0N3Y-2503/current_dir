@@ -34,7 +34,6 @@ use std::{
 pub mod aliases;
 pub mod scoped;
 mod sealed;
-pub mod test_utilities;
 
 /// Wrapper functions for [`env::set_current_dir()`] and [`env::current_dir()`] with [`Self`] borrowed.
 /// This is only implemented on types that have a reference to [`CurrentWorkingDirectory::mutex()`].
@@ -111,7 +110,7 @@ impl CurrentWorkingDirectory {
     ///   .expect_err("thread panicked");
     ///
     ///   let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-    ///   let poisoned_scope_stack = poisoned_locked_cwd.get_mut().scope_stack();
+    ///   let mut poisoned_scope_stack = poisoned_locked_cwd.get_mut().scope_stack();
     ///   assert_eq!(*poisoned_scope_stack.as_vec(), vec![test_dir.clone()]);
     ///
     ///   // Fix poisoned cwd
@@ -139,3 +138,6 @@ impl<'locked_cwd> TryFrom<&'locked_cwd mut CurrentWorkingDirectory>
         locked_cwd.scoped()
     }
 }
+
+#[cfg(test)]
+mod test_utilities;

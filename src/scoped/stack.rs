@@ -11,16 +11,17 @@ impl<'locked_cwd> CurrentWorkingDirectoryStack<'locked_cwd> {
     }
 
     pub fn push_scope(&mut self) -> io::Result<()> {
-        self.locked_cwd.scope_stack.push(self.locked_cwd.get()?);
+        let cwd = self.get()?;
+        self.as_mut_vec().push(cwd);
         Ok(())
     }
 
     pub fn pop_scope(&mut self) -> io::Result<Option<PathBuf>> {
-        match self.locked_cwd.scope_stack.pop() {
-            Some(previous) => match self.locked_cwd.set(&previous) {
+        match self.as_mut_vec().pop() {
+            Some(previous) => match self.set(&previous) {
                 Ok(_) => Ok(Some(previous)),
                 Err(err) => {
-                    self.locked_cwd.scope_stack.push(previous);
+                    self.as_mut_vec().push(previous);
                     Err(err)
                 }
             },
@@ -32,10 +33,11 @@ impl<'locked_cwd> CurrentWorkingDirectoryStack<'locked_cwd> {
         &self.locked_cwd.scope_stack
     }
 
-    pub unsafe fn as_mut_vec(&mut self) -> &mut Vec<PathBuf> {
+    pub fn as_mut_vec(&mut self) -> &mut Vec<PathBuf> {
         &mut self.locked_cwd.scope_stack
     }
 }
+impl CurrentWorkingDirectoryAccessor for CurrentWorkingDirectoryStack<'_> {}
 impl<'locked_cwd> From<&'locked_cwd mut crate::CurrentWorkingDirectory>
     for CurrentWorkingDirectoryStack<'locked_cwd>
 {
@@ -47,181 +49,160 @@ impl<'locked_cwd> From<&'locked_cwd mut crate::CurrentWorkingDirectory>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aliases::*;
-    use std::{error::Error, fs, iter, panic, path};
+    use crate::{aliases::*, test_utilities};
+    use std::{error::Error, fs, iter, path, time::Duration};
 
-    // #[test]
-    // fn test_stack() -> Result<(), Box<dyn Error>> {
-    //     let locked_cwd = Cwd::mutex().lock().unwrap();
+    #[test]
+    fn test_stack() -> Result<(), Box<dyn Error>> {
+        let mut locked_cwd =
+            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
+                .unwrap();
 
-    //     let mut cwd_stack = iter::repeat(locked_cwd.get().unwrap());
-    //     let cwd_stack = cwd_stack.by_ref();
+        let mut scope_stack = CurrentWorkingDirectoryStack::from(&mut *locked_cwd);
+        assert!(scope_stack.as_vec().is_empty());
 
-    //     let mut scope_stack = locked_cwd.scope_stack();
-    //     assert!(scope_stack.as_vec().is_empty());
+        let mut cwd_stack = iter::repeat(scope_stack.get().unwrap());
+        let cwd_stack = cwd_stack.by_ref();
+        assert!(scope_stack.as_vec().is_empty());
 
+        const TEST_RANGE: std::ops::Range<isize> = 1..20;
+        for i in TEST_RANGE {
+            scope_stack.push_scope().unwrap();
+            let expected = cwd_stack.take(i as usize).collect::<Vec<_>>();
+            assert_eq!(
+                *scope_stack.as_vec(),
+                expected,
+                "left: {}, right: {}",
+                scope_stack.as_vec().len(),
+                expected.len()
+            );
+        }
+        for i in TEST_RANGE.rev() {
+            assert_eq!(scope_stack.pop_scope().unwrap(), cwd_stack.next());
+            let expected = cwd_stack.take((i - 1) as usize).collect::<Vec<_>>();
+            assert_eq!(
+                *scope_stack.as_vec(),
+                expected,
+                "left: {}, right: {}",
+                scope_stack.as_vec().len(),
+                expected.len()
+            );
+        }
+        assert!(scope_stack.as_vec().is_empty());
 
-    //     const TEST_RANGE: std::ops::Range<isize> = 1..20;
-    //     for i in TEST_RANGE {
-    //         scope_stack.push_scope().unwrap();
-    //         let expected = cwd_stack.take(i as usize).collect::<Vec<_>>();
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             expected,
-    //             "left: {}, right: {}",
-    //             scope_stack.as_vec().len(),
-    //             expected.len()
-    //         );
-    //     }
-    //     for i in TEST_RANGE.rev() {
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), cwd_stack.next());
-    //         let expected = cwd_stack.take((i - 1) as usize).collect::<Vec<_>>();
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             expected,
-    //             "left: {}, right: {}",
-    //             scope_stack.as_vec().len(),
-    //             expected.len()
-    //         );
-    //     }
-    //     assert!(scope_stack.as_vec().is_empty());
+        Ok(())
+    }
 
-    //     Ok(())
-    // }
+    #[test]
+    fn test_delete_cwd() {
+        let mut locked_cwd =
+            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
+                .unwrap();
+        let mut locked_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+        let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
+        fs::create_dir(&test_dir).unwrap();
+        let _clean_up_test_dir = with_drop::with_drop((), |_| fs::remove_dir(&test_dir).unwrap());
 
-    // #[test]
-    // fn test_delete_cwd() {
-    //     let mut locked_cwd = Cwd::mutex().lock().unwrap();
+        let mut scope_stack = CurrentWorkingDirectoryStack::from(&mut **locked_cwd);
+        scope_stack.set(&test_dir).unwrap();
 
-    //     let initial_cwd = locked_cwd.get().unwrap();
-    //     let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
-    //     fs::create_dir(&test_dir).unwrap();
+        let mut test_dir_repeat = iter::repeat(test_dir.clone());
+        let test_dir_repeat = test_dir_repeat.by_ref();
 
-    //     let test_res = panic::catch_unwind(|| {
-    //         let mut scope_stack = CurrentWorkingDirectoryStack::new();
-    //         scope_stack.set(&test_dir).unwrap();
+        assert!(scope_stack.as_vec().is_empty());
+        scope_stack.push_scope().unwrap();
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(1).collect::<Vec<_>>()
+        );
+        scope_stack.push_scope().unwrap();
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(2).collect::<Vec<_>>()
+        );
+        scope_stack.push_scope().unwrap();
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(3).collect::<Vec<_>>()
+        );
 
-    //         let mut test_dir_repeat = iter::repeat(test_dir.clone());
-    //         let test_dir_repeat = test_dir_repeat.by_ref();
+        fs::remove_dir(&test_dir).unwrap();
 
-    //         assert!(scope_stack.as_vec().is_empty());
-    //         scope_stack.push_scope().unwrap();
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(1).collect::<Vec<_>>()
-    //         );
-    //         scope_stack.push_scope().unwrap();
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(2).collect::<Vec<_>>()
-    //         );
-    //         scope_stack.push_scope().unwrap();
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(3).collect::<Vec<_>>()
-    //         );
+        assert_eq!(
+            scope_stack.pop_scope().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(3).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            scope_stack.push_scope().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(3).collect::<Vec<_>>()
+        );
 
-    //         fs::remove_dir(&test_dir).unwrap();
+        fs::create_dir(&test_dir).unwrap();
+        scope_stack.set(&test_dir).unwrap();
 
-    //         assert_eq!(
-    //             scope_stack.pop_scope().unwrap_err().kind(),
-    //             io::ErrorKind::NotFound
-    //         );
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(3).collect::<Vec<_>>()
-    //         );
-    //         assert_eq!(
-    //             scope_stack.push_scope().unwrap_err().kind(),
-    //             io::ErrorKind::NotFound
-    //         );
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(3).collect::<Vec<_>>()
-    //         );
+        scope_stack.push_scope().unwrap();
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(4).collect::<Vec<_>>()
+        );
 
-    //         fs::create_dir(&test_dir).unwrap();
-    //         scope_stack.set(&test_dir).unwrap();
+        assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(3).collect::<Vec<_>>()
+        );
+        assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(2).collect::<Vec<_>>()
+        );
+        assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
+        assert_eq!(
+            *scope_stack.as_vec(),
+            test_dir_repeat.take(1).collect::<Vec<_>>()
+        );
+        assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
+        assert!(scope_stack.as_vec().is_empty());
+        assert_eq!(scope_stack.pop_scope().unwrap(), None);
+        assert!(scope_stack.as_vec().is_empty());
+    }
 
-    //         scope_stack.push_scope().unwrap();
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(4).collect::<Vec<_>>()
-    //         );
+    #[test]
+    fn test_pop_empty() {
+        let mut locked_cwd =
+            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
+                .unwrap();
+        let mut locked_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(3).collect::<Vec<_>>()
-    //         );
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(2).collect::<Vec<_>>()
-    //         );
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
-    //         assert_eq!(
-    //             *scope_stack.as_vec(),
-    //             test_dir_repeat.take(1).collect::<Vec<_>>()
-    //         );
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), test_dir_repeat.next());
-    //         assert!(scope_stack.as_vec().is_empty());
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), None);
-    //         assert!(scope_stack.as_vec().is_empty());
-    //     });
+        let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
+        fs::create_dir(&test_dir).unwrap();
+        let _clean_up_test_dir = with_drop::with_drop((), |_| fs::remove_dir(&test_dir).unwrap());
 
-    //     let clean_up_res = (|| -> Result<(), Box<dyn Error>> {
-    //         locked_cwd.set(initial_cwd)?;
-    //         fs::remove_dir(&test_dir)?;
-    //         Ok(())
-    //     })();
+        let mut scope_stack = CurrentWorkingDirectoryStack::from(&mut **locked_cwd);
+        scope_stack.set(&test_dir).unwrap();
 
-    //     if let Err(panic) = test_res {
-    //         panic::resume_unwind(panic)
-    //     }
+        assert_eq!(scope_stack.get().unwrap(), test_dir);
+        assert!(scope_stack.as_vec().is_empty());
+        assert_eq!(scope_stack.pop_scope().unwrap(), None);
+        assert_eq!(scope_stack.get().unwrap(), test_dir);
+        assert!(scope_stack.as_vec().is_empty());
 
-    //     clean_up_res.unwrap();
-    // }
+        scope_stack.push_scope().unwrap();
+        assert_eq!(*scope_stack.as_vec(), vec![test_dir.clone()]);
+        assert_eq!(scope_stack.pop_scope().unwrap(), Some(test_dir.clone()));
 
-    // #[test]
-    // fn test_pop_empty() {
-    //     let mut locked_cwd = Cwd::mutex().lock().unwrap();
-
-    //     let initial_cwd = locked_cwd.get().unwrap();
-    //     let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
-    //     fs::create_dir(&test_dir).unwrap();
-
-    //     let test_res = panic::catch_unwind(|| {
-    //         let mut scope_stack = CurrentWorkingDirectoryStack::new();
-    //         scope_stack.set(&test_dir).unwrap();
-
-    //         assert_eq!(scope_stack.get().unwrap(), test_dir);
-    //         assert!(scope_stack.as_vec().is_empty());
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), None);
-    //         assert_eq!(scope_stack.get().unwrap(), test_dir);
-    //         assert!(scope_stack.as_vec().is_empty());
-
-    //         scope_stack.push_scope().unwrap();
-    //         assert_eq!(*scope_stack.as_vec(), vec![test_dir.clone()]);
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), Some(test_dir.clone()));
-
-    //         assert_eq!(scope_stack.get().unwrap(), test_dir);
-    //         assert!(scope_stack.as_vec().is_empty());
-    //         assert_eq!(scope_stack.pop_scope().unwrap(), None);
-    //         assert_eq!(scope_stack.get().unwrap(), test_dir);
-    //         assert!(scope_stack.as_vec().is_empty());
-    //     });
-
-    //     let clean_up_res = (|| -> Result<(), Box<dyn Error>> {
-    //         locked_cwd.set(initial_cwd)?;
-    //         fs::remove_dir(&test_dir)?;
-    //         Ok(())
-    //     })();
-
-    //     if let Err(panic) = test_res {
-    //         panic::resume_unwind(panic)
-    //     }
-
-    //     clean_up_res.unwrap();
-    // }
+        assert_eq!(scope_stack.get().unwrap(), test_dir);
+        assert!(scope_stack.as_vec().is_empty());
+        assert_eq!(scope_stack.pop_scope().unwrap(), None);
+        assert_eq!(scope_stack.get().unwrap(), test_dir);
+        assert!(scope_stack.as_vec().is_empty());
+    }
 }

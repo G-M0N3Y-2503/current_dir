@@ -8,3 +8,6 @@ license-file = "LICENSE"
 readme = "README.md"
 keywords = ["async", "cwd", "filesystem", "test", "thread"]
 categories = ["concurrency", "development-tools::testing", "filesystem"]
+
+[dev-dependencies]
+with_drop = "0.0.3"

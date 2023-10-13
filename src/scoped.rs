@@ -64,15 +64,16 @@ impl Drop for CurrentWorkingDirectory<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aliases::*, *};
+    use super::*;
+    use crate::{aliases::*, test_utilities};
     use std::{error::Error, fs, panic, path, sync::OnceLock, thread, time::Duration};
 
     #[allow(clippy::significant_drop_tightening)] // false positive
     #[test]
     fn recursive_scopes() {
         let mut locked_cwd =
-            test_utilities::yield_poison_fixed(Cwd::mutex(), Duration::from_millis(500))
-                .expect("no test failed to clean up poison");
+            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
+                .unwrap();
         let initial_cwd = locked_cwd.get().unwrap();
         locked_cwd.set(env::temp_dir()).unwrap();
 
@@ -111,9 +112,11 @@ mod tests {
 
         let test_res = thread::scope(|s| {
             s.spawn(|| {
-                let mut locked_cwd =
-                    test_utilities::yield_poison_fixed(Cwd::mutex(), Duration::from_millis(500))
-                        .expect("no test failed to clean up poison");
+                let mut locked_cwd = test_utilities::yield_poison_addressed(
+                    Cwd::mutex(),
+                    Duration::from_millis(500),
+                )
+                .unwrap();
 
                 initial_cwd.set(locked_cwd.get().unwrap()).unwrap();
                 locked_cwd.set(&test_dir).unwrap();
