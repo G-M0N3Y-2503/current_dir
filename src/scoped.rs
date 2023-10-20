@@ -1,20 +1,19 @@
-//! A Scoped version of [`CurrentWorkingDirectory`](crate::CurrentWorkingDirectory)
+//! A Scoped version of [`Cwd`]
 
 use super::*;
-use core::ops::{Deref, DerefMut};
 pub mod stack;
 
-/// A Scoped version of [`CurrentWorkingDirectory`] that will [`reset()`][reset] the current working directory to it's previous state.
+/// A Scoped version of [`ScopedCwd`] that will [`reset()`][reset] the current working directory to it's previous state.
 ///
 /// [`reset()`][reset] will be called automatically on [`drop()`][drop] or manually to handle errors at any time.
 ///
 /// [reset]: Self::reset()
 /// [drop]: Self::drop()
-pub struct CurrentWorkingDirectory<'locked_cwd> {
-    scope_stack: stack::Stack<'locked_cwd>,
+pub struct ScopedCwd<'lock> {
+    scope_stack: stack::CwdStack<'lock>,
     has_reset: bool,
 }
-impl<'locked_cwd> CurrentWorkingDirectory<'locked_cwd> {
+impl ScopedCwd<'_> {
     /// Resets the current working directory to the initial current working directory at the time of `self`s creation.
     ///
     /// # Errors
@@ -31,24 +30,22 @@ impl<'locked_cwd> CurrentWorkingDirectory<'locked_cwd> {
     }
 }
 #[allow(clippy::missing_trait_methods)]
-impl CurrentWorkingDirectoryAccessor for CurrentWorkingDirectory<'_> {}
-impl Drop for CurrentWorkingDirectory<'_> {
+impl CwdAccessor for ScopedCwd<'_> {}
+impl Drop for ScopedCwd<'_> {
     #[inline]
     fn drop(&mut self) {
         if !self.has_reset {
             #[allow(clippy::expect_used)]
             self.reset()
                 .expect("current working directory can be reset to the initial value")
-                .expect("CurrentWorkingDirectory was created with somewhere to reset to");
+                .expect("ScopedCwd was created with somewhere to reset to");
         }
     }
 }
-impl<'new_scoped_cwd> TryFrom<&'new_scoped_cwd mut CurrentWorkingDirectory<'_>>
-    for CurrentWorkingDirectory<'new_scoped_cwd>
-{
+impl<'lock> TryFrom<&'lock mut ScopedCwd<'_>> for ScopedCwd<'lock> {
     type Error = io::Error;
 
-    /// Create a new [`CurrentWorkingDirectory`] under `scoped_cwd` that will [`reset()`][reset] to `scoped_cwd` when [`drop()`][drop] is called.
+    /// Create a new [`ScopedCwd`] under `scoped_cwd` that will [`reset()`][reset] to `scoped_cwd` when [`drop()`][drop] is called.
     ///
     /// # Errors
     /// The current directory cannot be retrieved as per [`env::current_dir()`]
@@ -56,26 +53,27 @@ impl<'new_scoped_cwd> TryFrom<&'new_scoped_cwd mut CurrentWorkingDirectory<'_>>
     /// [reset]: Self::reset()
     /// [drop]: Self::drop()
     #[inline]
-    fn try_from(
-        scoped_cwd: &'new_scoped_cwd mut CurrentWorkingDirectory<'_>,
-    ) -> Result<Self, Self::Error> {
-        Self::try_from(&mut *scoped_cwd.scope_stack)
+    fn try_from(scoped_cwd: &'lock mut ScopedCwd<'_>) -> Result<Self, Self::Error> {
+        Self::try_from(stack::CwdStack::from(&mut scoped_cwd.scope_stack))
     }
 }
-impl<'locked_cwd> TryFrom<&'locked_cwd mut crate::CurrentWorkingDirectory>
-    for CurrentWorkingDirectory<'locked_cwd>
-{
+impl<'lock> TryFrom<&'lock mut Cwd> for ScopedCwd<'lock> {
     type Error = io::Error;
 
-    /// Creates a [`scoped::CurrentWorkingDirectory`] mutably borrowing the locked [`Self`].
+    /// Creates a [`ScopedCwd`] mutably borrowing the locked [`Self`].
     ///
     /// # Errors
     /// The current directory cannot be retrieved as per [`env::current_dir()`]
     #[inline]
-    fn try_from(
-        locked_cwd: &'locked_cwd mut crate::CurrentWorkingDirectory,
-    ) -> Result<Self, Self::Error> {
-        let mut scope_stack = stack::Stack::from(locked_cwd);
+    fn try_from(locked_cwd: &'lock mut Cwd) -> Result<Self, Self::Error> {
+        Self::try_from(stack::CwdStack::from(locked_cwd))
+    }
+}
+impl<'lock> TryFrom<stack::CwdStack<'lock>> for ScopedCwd<'lock> {
+    type Error = io::Error;
+
+    #[inline]
+    fn try_from(mut scope_stack: stack::CwdStack<'lock>) -> Result<Self, Self::Error> {
         scope_stack.push_scope()?;
         Ok(Self {
             scope_stack,
@@ -87,12 +85,11 @@ impl<'locked_cwd> TryFrom<&'locked_cwd mut crate::CurrentWorkingDirectory>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{aliases::*, test_utilities};
+    use crate::{prelude::*, test_utilities};
     use core::time::Duration;
     use std::{fs, panic, path, thread};
     use with_drop::with_drop;
 
-    // #[allow(clippy::significant_drop_tightening)] // false positive
     #[test]
     fn recursive_scopes() {
         let mut locked_cwd =
@@ -151,7 +148,7 @@ mod tests {
         .expect_err("thread panicked");
 
         let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-        let mut poisoned_scope_stack = ScopeStack::from(&mut **poisoned_locked_cwd.get_mut());
+        let mut poisoned_scope_stack = CwdStack::from(&mut **poisoned_locked_cwd.get_mut());
         assert!(!poisoned_scope_stack.as_vec().is_empty(), "not dirty");
         assert_eq!(*poisoned_scope_stack.as_vec(), vec![(*rm_test_dir).clone()]);
 

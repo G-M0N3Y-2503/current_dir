@@ -13,6 +13,7 @@
     clippy::redundant_else,
     clippy::self_named_module_files,
     clippy::semicolon_outside_block,
+    clippy::significant_drop_tightening, // false positive
     clippy::single_call_fn, // Can't seem to override at instance
     clippy::wildcard_imports
 )]
@@ -35,13 +36,13 @@ use std::{
     sync::Mutex,
 };
 
-pub mod aliases;
+pub mod prelude;
 pub mod scoped;
 mod sealed;
 
 /// Wrapper functions for [`env::set_current_dir()`] and [`env::current_dir()`] with [`Self`] borrowed.
-/// This is only implemented on types that have a reference to [`CurrentWorkingDirectory::mutex()`].
-pub trait CurrentWorkingDirectoryAccessor: sealed::Sealed {
+/// This is only implemented on types that have a reference to [`Cwd::mutex()`].
+pub trait CwdAccessor: sealed::Sealed {
     #![allow(clippy::missing_errors_doc)]
 
     /// Wrapper function to ensure [`env::current_dir()`] is called with [`Self`] borrowed.
@@ -57,14 +58,14 @@ pub trait CurrentWorkingDirectoryAccessor: sealed::Sealed {
     }
 }
 
-static CWD_MUTEX: Mutex<CurrentWorkingDirectory> = Mutex::new(CurrentWorkingDirectory::new());
+static CWD_MUTEX: Mutex<Cwd> = Mutex::new(Cwd::new());
 
 /// Wrapper type to help the usage of the current working directory for the process.
 #[derive(Debug)]
-pub struct CurrentWorkingDirectory {
+pub struct Cwd {
     scope_stack: Vec<PathBuf>,
 }
-impl CurrentWorkingDirectory {
+impl Cwd {
     const fn new() -> Self {
         Self {
             scope_stack: Vec::new(),
@@ -81,7 +82,7 @@ impl CurrentWorkingDirectory {
     }
 }
 #[allow(clippy::missing_trait_methods)]
-impl CurrentWorkingDirectoryAccessor for CurrentWorkingDirectory {}
+impl CwdAccessor for Cwd {}
 
 #[cfg(test)]
 mod test_utilities;

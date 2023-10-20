@@ -9,36 +9,31 @@ use std::{
 use with_drop::*;
 
 /// using [super] so we can include!() this in ../tests/intergration.rs)
-use super::*;
+use super::prelude::*;
 
 #[macro_export]
 macro_rules! called_from {
-    () => {
-        {
-            let mut call_location = env!("CARGO_PKG_NAME").to_owned();
-            call_location.push_str(concat!(' ', file!(), ':', line!(), ':', column!()));
-            call_location
-        }
-    };
+    () => {{
+        let mut call_location = env!("CARGO_PKG_NAME").to_owned();
+        call_location.push_str(concat!(' ', file!(), ':', line!(), ':', column!()));
+        call_location
+    }};
 }
 
-/// Returns the locked and un-poisoned [`CurrentWorkingDirectory`] or, [yields](yield_now) for up to `yield_timeout`
-/// until the poisoned [`CurrentWorkingDirectory`] has been addressed and can be locked.
+/// Returns the locked and un-poisoned [`Cwd`] or, [yields](yield_now) for up to `yield_timeout`
+/// until the poisoned [`Cwd`] has been addressed and can be locked.
 /// Otherwise, [`None`]
 pub fn yield_poison_addressed(
-    mutex: &Mutex<CurrentWorkingDirectory>,
+    mutex: &Mutex<Cwd>,
     yield_timeout: Duration,
-) -> Option<MutexGuard<'_, CurrentWorkingDirectory>> {
+) -> Option<MutexGuard<'_, Cwd>> {
     let now = Instant::now();
     loop {
         match mutex.lock() {
             Ok(locked_cwd) => break Some(locked_cwd),
             Err(poisoned_locked_cwd) => {
                 let mut locked_cwd = poisoned_locked_cwd.into_inner();
-                if scoped::stack::Stack::from(&mut *locked_cwd)
-                    .as_vec()
-                    .is_empty()
-                {
+                if CwdStack::from(&mut *locked_cwd).as_vec().is_empty() {
                     break Some(locked_cwd);
                 } else if now.elapsed() <= yield_timeout {
                     yield_now();
@@ -55,11 +50,9 @@ pub fn yield_poison_addressed(
 /// # Panics
 /// The returned closure panics if the current working directory cannot be set to the current working
 /// directory cached at the time of the call to [`reset_cwd()`].
-pub fn reset_cwd(
-    locked_cwd: &mut CurrentWorkingDirectory,
-) -> WithDrop<&mut CurrentWorkingDirectory, impl FnOnce(&mut CurrentWorkingDirectory)> {
+pub fn reset_cwd(locked_cwd: &mut Cwd) -> WithDrop<&mut Cwd, impl FnOnce(&mut Cwd)> {
     let initial_cwd = locked_cwd.get().unwrap();
-    let reset_cwd_fn = move |cwd: &mut CurrentWorkingDirectory| {
+    let reset_cwd_fn = move |cwd: &mut Cwd| {
         cwd.set(&initial_cwd)
             .expect("initial CWD should still be valid");
     };
@@ -69,8 +62,7 @@ pub fn reset_cwd(
 #[test]
 fn test_cwd_test() {
     let mut locked_cwd_guard =
-        yield_poison_addressed(CurrentWorkingDirectory::mutex(), Duration::from_millis(500))
-            .unwrap();
+        yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500)).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
 
@@ -88,8 +80,7 @@ fn test_cwd_test() {
 #[should_panic(expected = "test panic")]
 fn test_cwd_test_panic() {
     let mut locked_cwd_guard =
-        yield_poison_addressed(CurrentWorkingDirectory::mutex(), Duration::from_millis(500))
-            .unwrap();
+        yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500)).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
     let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);

@@ -1,10 +1,53 @@
+//! Access to the stack of scopes used by [`ScopedCwd`], you probably want to use
+//! [`ScopedCwd`] instead. This is only really useful for cleaning up if the [`Mutex`] if it was poisoned.
+//!
+//! Notably, the mutex may be poisoned if the directory a [`ScopedCwd`] should reset to is deleted or
+//! similarly inaccessible when the scope ends.
+//!
+//! ```
+//! # let test_dir =
+//! #     env::temp_dir().join(&(env!("CARGO_PKG_NAME").to_owned() + " scope_stack_doc_test"));
+//! # if !test_dir.exists() {
+//! #     fs::create_dir(&test_dir)?;
+//! # }
+//! #
+//!   use current_dir::prelude::*;
+//!   use std::{env, error::Error, fs, thread};
+//!
+//!   thread::scope(|s| {
+//!       s.spawn(|| -> Result<(), Box<dyn Error + Send + Sync>> {
+//!           let mut locked_cwd = Cwd::mutex().lock().unwrap();
+//!
+//!           // delete cwd before the ScopedCwd is dropped
+//!           locked_cwd.set(&test_dir)?;
+//!           let _scope_locked_cwd = ScopedCwd::try_from(&mut *locked_cwd)?;
+//!           fs::remove_dir(&test_dir)?;
+//!
+//!           Ok(())
+//!       })
+//!       .join()
+//!   })
+//!   .expect_err("thread panicked");
+//!
+//!   let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
+//!   let mut poisoned_scope_stack = ScopeStack::from(&mut **poisoned_locked_cwd.get_mut());
+//!   assert_eq!(*poisoned_scope_stack.as_vec(), vec![test_dir.clone()]);
+//!
+//!   // Fix poisoned cwd
+//!   fs::create_dir(test_dir)?;
+//!   poisoned_scope_stack.pop_scope()?;
+//!   let _locked_cwd = poisoned_locked_cwd.into_inner();
+//!
+//! # Ok::<_, Box<dyn Error>>(())
+//! ```
+
 use super::*;
 
-/// A stack of directories that representing a history of current working directories.
-pub struct Stack<'locked_cwd> {
-    locked_cwd: &'locked_cwd mut crate::CurrentWorkingDirectory,
+/// A helper type exposing the stack of directories representing the history of current working directories.
+pub struct CwdStack<'lock> {
+    scope_stack: &'lock mut Vec<PathBuf>,
 }
-impl<'locked_cwd> Stack<'locked_cwd> {
+impl CwdStack<'_> {
     /// Pushes the current working directory onto the stack.
     ///
     /// # Errors
@@ -16,7 +59,8 @@ impl<'locked_cwd> Stack<'locked_cwd> {
         Ok(())
     }
 
-    /// Pops the previous current working directory saved with [`push_scope()`] and sets it to the current working directory.
+    /// Pops the previous current working directory saved with [`push_scope()`](Self::push_scope()) and sets it to the
+    /// current working directory.
     ///
     /// # Errors
     /// Calls [`env::set_current_dir()`] internally that can error.
@@ -38,82 +82,39 @@ impl<'locked_cwd> Stack<'locked_cwd> {
     #[inline]
     #[must_use]
     pub fn as_vec(&self) -> &Vec<PathBuf> {
-        &self.locked_cwd.scope_stack
+        self.scope_stack
     }
 
     /// Gets a mutable reference to the internal collection.
     #[inline]
     #[must_use]
     pub fn as_mut_vec(&mut self) -> &mut Vec<PathBuf> {
-        &mut self.locked_cwd.scope_stack
+        self.scope_stack
     }
 }
 #[allow(clippy::missing_trait_methods)]
-impl CurrentWorkingDirectoryAccessor for Stack<'_> {}
-impl<'locked_cwd> From<&'locked_cwd mut crate::CurrentWorkingDirectory> for Stack<'locked_cwd> {
-    /// Access to the stack of scopes used by [`scoped::CurrentWorkingDirectory`].</br>
-    /// This is only useful for cleaning up if the [`Mutex`] if it was poisoned.
-    ///
-    /// ```
-    /// # let test_dir =
-    /// #     env::temp_dir().join(&(env!("CARGO_PKG_NAME").to_owned() + " scope_stack_doc_test"));
-    /// # if !test_dir.exists() {
-    /// #     fs::create_dir(&test_dir)?;
-    /// # }
-    /// #
-    ///   use current_dir::aliases::*;
-    ///   use std::{env, error::Error, fs, thread};
-    ///
-    ///   thread::scope(|s| {
-    ///       s.spawn(|| -> Result<(), Box<dyn Error + Send + Sync>> {
-    ///           let mut locked_cwd = Cwd::mutex().lock().unwrap();
-    ///           locked_cwd.set(&test_dir)?;
-    ///           let _scope_locked_cwd = ScopedCwd::try_from(&mut *locked_cwd)?;
-    ///
-    ///           // delete scoped cwd reset dir
-    ///           fs::remove_dir(&test_dir)?;
-    ///
-    ///           Ok(())
-    ///       })
-    ///       .join()
-    ///   })
-    ///   .expect_err("thread panicked");
-    ///
-    ///   let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-    ///   let mut poisoned_scope_stack = ScopeStack::from(&mut **poisoned_locked_cwd.get_mut());
-    ///   assert_eq!(*poisoned_scope_stack.as_vec(), vec![test_dir.clone()]);
-    ///
-    ///   // Fix poisoned cwd
-    ///   fs::create_dir(test_dir)?;
-    ///   poisoned_scope_stack.pop_scope()?;
-    ///   let _locked_cwd = poisoned_locked_cwd.into_inner();
-    ///
-    /// # Ok::<_, Box<dyn Error>>(())
-    /// ```
+impl CwdAccessor for CwdStack<'_> {}
+impl<'lock> From<&'lock mut Cwd> for CwdStack<'lock> {
     #[inline]
-    fn from(locked_cwd: &'locked_cwd mut crate::CurrentWorkingDirectory) -> Self {
-        Self { locked_cwd }
+    fn from(locked_cwd: &'lock mut Cwd) -> Self {
+        Self {
+            scope_stack: &mut locked_cwd.scope_stack,
+        }
     }
 }
-impl Deref for Stack<'_> {
-    type Target = crate::CurrentWorkingDirectory;
-
+impl<'lock> From<&'lock mut CwdStack<'_>> for CwdStack<'lock> {
     #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.locked_cwd
-    }
-}
-impl DerefMut for Stack<'_> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.locked_cwd
+    fn from(stack: &'lock mut CwdStack<'_>) -> Self {
+        Self {
+            scope_stack: stack.scope_stack,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{aliases::*, test_utilities};
+    use crate::test_utilities;
     use core::{iter, ops::Range, time::Duration};
     use std::{fs, path};
 
@@ -124,7 +125,7 @@ mod tests {
             test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
                 .unwrap();
 
-        let mut scope_stack = Stack::from(&mut *locked_cwd);
+        let mut scope_stack = CwdStack::from(&mut *locked_cwd);
         assert!(scope_stack.as_vec().is_empty());
 
         let mut cwd_stack = iter::repeat(scope_stack.get().unwrap());
@@ -166,7 +167,7 @@ mod tests {
         fs::create_dir_all(&test_dir).unwrap();
         let _clean_up_test_dir = with_drop::with_drop((), |()| fs::remove_dir(&test_dir).unwrap());
 
-        let mut scope_stack = Stack::from(&mut **cwd);
+        let mut scope_stack = CwdStack::from(&mut **cwd);
         scope_stack.set(&test_dir).unwrap();
 
         let mut test_dir_repeat = iter::repeat(test_dir.clone());
@@ -249,7 +250,7 @@ mod tests {
         fs::create_dir_all(&test_dir).unwrap();
         let _clean_up_test_dir = with_drop::with_drop((), |()| fs::remove_dir(&test_dir).unwrap());
 
-        let mut scope_stack = Stack::from(&mut **cwd);
+        let mut scope_stack = CwdStack::from(&mut **cwd);
         scope_stack.set(&test_dir).unwrap();
 
         assert_eq!(scope_stack.get().unwrap(), test_dir);

@@ -1,4 +1,6 @@
+use super::prelude::*;
+
 pub trait Sealed {}
-impl Sealed for super::CurrentWorkingDirectory {}
-impl Sealed for super::scoped::CurrentWorkingDirectory<'_> {}
-impl Sealed for super::scoped::stack::Stack<'_> {}
+impl Sealed for Cwd {}
+impl Sealed for ScopedCwd<'_> {}
+impl Sealed for CwdStack<'_> {}
