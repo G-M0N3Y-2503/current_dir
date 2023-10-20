@@ -54,19 +54,19 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
       // cwd == /tmp
 #     assert_eq!(locked_cwd.get()?, temp_dir());
       {
-          let mut scope_locked_cwd = locked_cwd.scoped()?;
+          let mut scope_locked_cwd = scoped::CurrentWorkingDirectory::try_from(&mut *locked_cwd)?;
 #         mkdir("sub")?;
           scope_locked_cwd.set("sub")?;
           // cwd == /tmp/sub
 #         assert_eq!(scope_locked_cwd.get()?, temp_dir().join("sub"));
           {
-              let mut sub_scope_locked_cwd = scope_locked_cwd.new()?;
+              let mut sub_scope_locked_cwd = scoped::CurrentWorkingDirectory::try_from(&mut scope_locked_cwd)?;
 #             mkdir("sub")?;
               sub_scope_locked_cwd.set("sub")?;
               // cwd == /tmp/sub/sub
 #             assert_eq!(sub_scope_locked_cwd.get()?, temp_dir().join("sub/sub"));
               {
-                  let mut sub_sub_scope_locked_cwd = sub_scope_locked_cwd.new()?;
+                  let mut sub_sub_scope_locked_cwd = scoped::CurrentWorkingDirectory::try_from(&mut sub_scope_locked_cwd)?;
                   sub_sub_scope_locked_cwd.set(temp_dir())?;
                   // cwd == /tmp
 #                 assert_eq!(sub_sub_scope_locked_cwd.get()?, temp_dir());

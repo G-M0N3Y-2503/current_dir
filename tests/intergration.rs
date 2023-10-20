@@ -1,71 +1,91 @@
 use current_dir::*;
 use std::{env, time::Duration};
+use with_drop::with_drop;
+
+use crate::test_utilities::reset_cwd;
 
 mod test_utilities {
     include!("../src/test_utilities.rs");
 }
 
-#[allow(clippy::significant_drop_tightening)] // false positive
+// #[allow(clippy::significant_drop_tightening)] // false positive
 #[test]
 fn recursive_scopes() {
-    std::thread::sleep(Duration::from_secs(1));
-    let mut cwd =
-        test_utilities::yield_poison_addressed(CurrentWorkingDirectory::mutex(), Duration::from_millis(500))
-            .expect("no test failed to clean up poison");
-    let initial_cwd = cwd.get().unwrap();
+    let mut cwd = test_utilities::yield_poison_addressed(
+        CurrentWorkingDirectory::mutex(),
+        Duration::from_millis(500),
+    )
+    .expect("no test failed to clean up poison");
+    let mut cwd = test_utilities::reset_cwd(&mut cwd);
+
     cwd.set(env::temp_dir()).unwrap();
-
     {
-        let mut scoped_cwd = cwd.scoped().unwrap();
+        let mut scoped_cwd = scoped::CurrentWorkingDirectory::try_from(&mut **cwd).unwrap();
         scoped_cwd.set(env::temp_dir()).unwrap();
-
-        let mut sub_scoped_cwd = scoped::CurrentWorkingDirectory::new(&mut scoped_cwd).unwrap();
-        sub_scoped_cwd.set(env::temp_dir()).unwrap();
-
-        let mut sub_sub_scoped_cwd = sub_scoped_cwd.new().unwrap();
-        sub_sub_scoped_cwd.set(env::temp_dir()).unwrap();
-    };
-
-    cwd.set(initial_cwd).unwrap();
+        {
+            let mut sub_scoped_cwd =
+                scoped::CurrentWorkingDirectory::try_from(&mut scoped_cwd).unwrap();
+            sub_scoped_cwd.set(env::temp_dir()).unwrap();
+            {
+                let mut sub_sub_scoped_cwd =
+                    scoped::CurrentWorkingDirectory::try_from(&mut sub_scoped_cwd).unwrap();
+                sub_sub_scoped_cwd.set(env::temp_dir()).unwrap();
+            }
+            sub_scoped_cwd.set(env::temp_dir()).unwrap();
+        }
+        scoped_cwd.set(env::temp_dir()).unwrap();
+    }
+    cwd.set(env::temp_dir()).unwrap();
 }
 
 #[test]
 #[should_panic(
-    expected = "current working directory can be set: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }"
+    expected = "current working directory can be reset to the initial value: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }"
 )]
 fn clean_up_poisend() {
     use std::{env, fs, panic, path, thread};
 
-    let test_dir =
-        env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
-    if !test_dir.exists() {
-        fs::create_dir(&test_dir).unwrap();
-    }
+    let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
+    let test_dir = with_drop(&test_dir, |test_dir| {
+        if test_dir.exists() {
+            fs::remove_dir(test_dir).unwrap();
+        }
+    });
+    fs::create_dir(*test_dir).unwrap();
 
-    let thread_result = thread::scope(|s| {
+    let panic = thread::scope(|s| {
         s.spawn(|| {
             let mut locked_cwd = test_utilities::yield_poison_addressed(
                 CurrentWorkingDirectory::mutex(),
                 Duration::from_millis(500),
             )
-            .expect("no test failed to clean up poison");
-            locked_cwd.set(&test_dir).unwrap();
-            let _scope_locked_cwd = locked_cwd.scoped().unwrap();
+            .unwrap();
+            let mut locked_cwd = reset_cwd(&mut locked_cwd);
 
-            // delete scoped cwd reset dir
-            fs::remove_dir(&test_dir).unwrap();
+            // cause panic in `_scope_locked_cwd` drop
+            locked_cwd.set(*test_dir).unwrap();
+            let _scope_locked_cwd =
+                scoped::CurrentWorkingDirectory::try_from(&mut **locked_cwd).unwrap();
+            fs::remove_dir(*test_dir).unwrap();
         })
         .join()
-    });
+    })
+    .expect_err("thread panicked");
 
-    let mut poisoned_locked_cwd = CurrentWorkingDirectory::mutex().lock().expect_err("cwd poisoned");
-    let mut poisoned_scope_stack = poisoned_locked_cwd.get_mut().scope_stack();
-    assert_eq!(*poisoned_scope_stack.as_vec(), vec![test_dir.clone()]);
+    let mut poisoned_locked_cwd = CurrentWorkingDirectory::mutex()
+        .lock()
+        .expect_err("cwd poisoned");
+    let mut poisoned_scope_stack = scoped::stack::Stack::from(&mut **poisoned_locked_cwd.get_mut());
+    assert!(!poisoned_scope_stack.as_vec().is_empty(), "not dirty");
+    assert_eq!(*poisoned_scope_stack.as_vec(), vec![(*test_dir).clone()]);
 
     // Fix poisoned cwd
-    fs::create_dir(&test_dir).unwrap();
-    assert_eq!(poisoned_scope_stack.pop_scope().unwrap(), Some(test_dir));
+    fs::create_dir(*test_dir).unwrap();
+    assert_eq!(
+        poisoned_scope_stack.pop_scope().unwrap(),
+        Some((*test_dir).clone())
+    );
     let _locked_cwd = poisoned_locked_cwd.into_inner();
 
-    panic::resume_unwind(thread_result.expect_err("thread panicked"));
+    panic::resume_unwind(panic);
 }

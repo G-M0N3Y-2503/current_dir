@@ -1,7 +1,10 @@
+use core::time::Duration;
 use std::{
+    env::temp_dir,
+    panic::resume_unwind,
     sync::{Mutex, MutexGuard},
-    thread::yield_now,
-    time::Duration,
+    thread::{self, yield_now},
+    time::Instant,
 };
 use with_drop::*;
 
@@ -11,24 +14,31 @@ use super::*;
 #[macro_export]
 macro_rules! called_from {
     () => {
-        env!("CARGO_PKG_NAME").to_owned() + concat!(' ', file!(), ':', line!(), ':', column!())
+        {
+            let mut call_location = env!("CARGO_PKG_NAME").to_owned();
+            call_location.push_str(concat!(' ', file!(), ':', line!(), ':', column!()));
+            call_location
+        }
     };
 }
 
-/// Returns the locked and un-poisoned [CurrentWorkingDirectory] or, [yields](yield_now) for up to `yield_timeout`
-/// until the poisoned [CurrentWorkingDirectory] has been addressed and can be locked.
+/// Returns the locked and un-poisoned [`CurrentWorkingDirectory`] or, [yields](yield_now) for up to `yield_timeout`
+/// until the poisoned [`CurrentWorkingDirectory`] has been addressed and can be locked.
 /// Otherwise, [`None`]
 pub fn yield_poison_addressed(
     mutex: &Mutex<CurrentWorkingDirectory>,
     yield_timeout: Duration,
 ) -> Option<MutexGuard<'_, CurrentWorkingDirectory>> {
-    let now = std::time::Instant::now();
+    let now = Instant::now();
     loop {
         match mutex.lock() {
             Ok(locked_cwd) => break Some(locked_cwd),
             Err(poisoned_locked_cwd) => {
                 let mut locked_cwd = poisoned_locked_cwd.into_inner();
-                if locked_cwd.scope_stack().as_vec().is_empty() {
+                if scoped::stack::Stack::from(&mut *locked_cwd)
+                    .as_vec()
+                    .is_empty()
+                {
                     break Some(locked_cwd);
                 } else if now.elapsed() <= yield_timeout {
                     yield_now();
@@ -41,18 +51,17 @@ pub fn yield_poison_addressed(
     }
 }
 
-/// Returns the locked_cwd that will reset to the current working directory when dropped.
+/// Returns the `locked_cwd` that will reset to the current working directory when dropped.
 /// # Panics
 /// The returned closure panics if the current working directory cannot be set to the current working
-/// directory cached at the time of the call to [reset_cwd()].
+/// directory cached at the time of the call to [`reset_cwd()`].
 pub fn reset_cwd(
     locked_cwd: &mut CurrentWorkingDirectory,
 ) -> WithDrop<&mut CurrentWorkingDirectory, impl FnOnce(&mut CurrentWorkingDirectory)> {
     let initial_cwd = locked_cwd.get().unwrap();
-    let reset_cwd_fn = move |locked_cwd: &mut CurrentWorkingDirectory| {
-        locked_cwd
-            .set(&initial_cwd)
-            .expect("initial CWD should still be valid")
+    let reset_cwd_fn = move |cwd: &mut CurrentWorkingDirectory| {
+        cwd.set(&initial_cwd)
+            .expect("initial CWD should still be valid");
     };
     with_drop(locked_cwd, reset_cwd_fn)
 }
@@ -63,16 +72,16 @@ fn test_cwd_test() {
         yield_poison_addressed(CurrentWorkingDirectory::mutex(), Duration::from_millis(500))
             .unwrap();
 
-    assert_ne!(locked_cwd_guard.get().unwrap(), std::env::temp_dir());
-    let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);
-    assert_ne!(locked_cwd.get().unwrap(), std::env::temp_dir());
+    assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
 
-    (move || {
-        locked_cwd.set(std::env::temp_dir()).unwrap();
-        assert_eq!(locked_cwd.get().unwrap(), std::env::temp_dir());
-    })();
+    {
+        let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);
+        assert_ne!(locked_cwd.get().unwrap(), temp_dir());
+        locked_cwd.set(temp_dir()).unwrap();
+        assert_eq!(locked_cwd.get().unwrap(), temp_dir());
+    };
 
-    assert_ne!(locked_cwd_guard.get().unwrap(), std::env::temp_dir());
+    assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
 }
 
 #[test]
@@ -82,20 +91,21 @@ fn test_cwd_test_panic() {
         yield_poison_addressed(CurrentWorkingDirectory::mutex(), Duration::from_millis(500))
             .unwrap();
 
-    assert_ne!(locked_cwd_guard.get().unwrap(), std::env::temp_dir());
+    assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
     let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);
-    assert_ne!(locked_cwd.get().unwrap(), std::env::temp_dir());
+    assert_ne!(locked_cwd.get().unwrap(), temp_dir());
 
-    let test_cwd_panic = std::thread::scope(|s| {
-        s.spawn(move || {
-            locked_cwd.set(std::env::temp_dir()).unwrap();
-            assert_eq!(locked_cwd.get().unwrap(), std::env::temp_dir());
-            panic!("test panic")
-        })
-        .join()
+    let test_cwd_panic = thread::scope(|scope| {
+        scope
+            .spawn(move || {
+                locked_cwd.set(temp_dir()).unwrap();
+                assert_eq!(locked_cwd.get().unwrap(), temp_dir());
+                panic!("test panic")
+            })
+            .join()
     })
     .expect_err("Test panicked");
 
-    assert_ne!(locked_cwd_guard.get().unwrap(), std::env::temp_dir());
-    std::panic::resume_unwind(test_cwd_panic);
+    assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
+    resume_unwind(test_cwd_panic);
 }
