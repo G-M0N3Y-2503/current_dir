@@ -9,8 +9,11 @@ use std::{
 use with_drop::*;
 
 /// using [super] so we can include!() this in ../tests/intergration.rs)
-use super::prelude::*;
+use super::*;
 
+/// Creates a unique string with information about where the macro was written.
+/// # Form
+/// `package_name /path/to/file.rs:68:20`
 #[macro_export]
 macro_rules! called_from {
     () => {{

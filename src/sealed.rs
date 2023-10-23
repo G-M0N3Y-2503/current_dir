@@ -1,6 +1,9 @@
-use super::prelude::*;
+//! Private module for the [`Sealed`] trait.
 
+use super::*;
+
+/// Trait to protect against downstream implementations.
 pub trait Sealed {}
 impl Sealed for Cwd {}
-impl Sealed for ScopedCwd<'_> {}
+impl Sealed for CwdGuard<'_> {}
 impl Sealed for CwdStack<'_> {}

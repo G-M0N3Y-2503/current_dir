@@ -34,7 +34,7 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 # }
 ```
 
-## [`ScopedCwd`][ScopedCwd] Example
+## [`CwdGuard`][CwdGuard] Example
 ```rust
 # fn mkdir<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<()> {
 #     let path = path.as_ref();
@@ -54,28 +54,28 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
       // cwd == /tmp
 #     assert_eq!(locked_cwd.get()?, temp_dir());
       {
-          let mut scope_locked_cwd = ScopedCwd::try_from(&mut *locked_cwd)?;
+          let mut cwd_guard = CwdGuard::try_from(&mut *locked_cwd)?;
 #         mkdir("sub")?;
-          scope_locked_cwd.set("sub")?;
+          cwd_guard.set("sub")?;
           // cwd == /tmp/sub
-#         assert_eq!(scope_locked_cwd.get()?, temp_dir().join("sub"));
+#         assert_eq!(cwd_guard.get()?, temp_dir().join("sub"));
           {
-              let mut sub_scope_locked_cwd = ScopedCwd::try_from(&mut scope_locked_cwd)?;
+              let mut sub_cwd_guard = CwdGuard::try_from(&mut cwd_guard)?;
 #             mkdir("sub")?;
-              sub_scope_locked_cwd.set("sub")?;
+              sub_cwd_guard.set("sub")?;
               // cwd == /tmp/sub/sub
-#             assert_eq!(sub_scope_locked_cwd.get()?, temp_dir().join("sub/sub"));
+#             assert_eq!(sub_cwd_guard.get()?, temp_dir().join("sub/sub"));
               {
-                  let mut sub_sub_scope_locked_cwd = ScopedCwd::try_from(&mut sub_scope_locked_cwd)?;
-                  sub_sub_scope_locked_cwd.set(temp_dir())?;
+                  let mut sub_sub_cwd_guard = CwdGuard::try_from(&mut sub_cwd_guard)?;
+                  sub_sub_cwd_guard.set(temp_dir())?;
                   // cwd == /tmp
-#                 assert_eq!(sub_sub_scope_locked_cwd.get()?, temp_dir());
+#                 assert_eq!(sub_sub_cwd_guard.get()?, temp_dir());
               }
               // cwd == /tmp/sub/sub
-#             assert_eq!(sub_scope_locked_cwd.get()?, temp_dir().join("sub/sub"));
+#             assert_eq!(sub_cwd_guard.get()?, temp_dir().join("sub/sub"));
           }
           // cwd == /tmp/sub
-#         assert_eq!(scope_locked_cwd.get()?, temp_dir().join("sub"));
+#         assert_eq!(cwd_guard.get()?, temp_dir().join("sub"));
       }
       // cwd == /tmp
 #     assert_eq!(locked_cwd.get()?, temp_dir());
@@ -84,7 +84,7 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 # }
 ```
 
-[Cwd]: https://docs.rs/current_dir/latest/current_dir/struct.CurrentWorkingDirectory.html
-[ScopedCwd]: https://docs.rs/current_dir/latest/current_dir/scoped/struct.CurrentWorkingDirectory.html
+[Cwd]: https://docs.rs/current_dir/latest/current_dir/struct.Cwd.html
+[CwdGuard]: https://docs.rs/current_dir/latest/current_dir/struct.CwdGuard.html
 [set_current_dir]: <https://doc.rust-lang.org/stable/std/env/fn.set_current_dir.html> "std::env::set_current_dir()"
 [current_dir]: <https://doc.rust-lang.org/stable/std/env/fn.current_dir.html> "std::env::current_dir()"
