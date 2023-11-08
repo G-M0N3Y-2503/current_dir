@@ -15,9 +15,9 @@
     clippy::semicolon_outside_block,
     clippy::significant_drop_tightening, // false positive
     clippy::single_call_fn, // Can't seem to override at instance
+    clippy::unseparated_literal_suffix,
     clippy::wildcard_imports
 )]
-#![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used,))]
 #![doc(test(attr(
     deny(warnings),
     deny(
@@ -28,6 +28,7 @@
         rustdoc::all,
     )
 )))]
+#![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
 #![doc = include_str!("../README.md")]
 
 use std::{
@@ -38,6 +39,9 @@ use std::{
 
 mod sealed;
 
+#[cfg(test)]
+mod test_utilities;
+
 /// Wrapper functions for [`env::set_current_dir()`] and [`env::current_dir()`] with [`Self`] borrowed.
 /// This is only implemented on types that have a reference to [`Cwd::mutex()`].
 pub trait CwdAccessor: sealed::Sealed {
@@ -45,12 +49,14 @@ pub trait CwdAccessor: sealed::Sealed {
 
     /// Wrapper function to ensure [`env::current_dir()`] is called with [`Self`] borrowed.
     #[inline]
+    #[doc(alias = "current_dir")]
     fn get(&self) -> io::Result<PathBuf> {
         env::current_dir()
     }
 
     /// Wrapper function to ensure [`env::set_current_dir()`] is called with [`Self`] borrowed.
     #[inline]
+    #[doc(alias = "set_current_dir")]
     fn set<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         env::set_current_dir(path)
     }
@@ -167,48 +173,26 @@ impl<'lock> TryFrom<CwdStack<'lock>> for CwdGuard<'lock> {
     }
 }
 
+// #[cfg(test)]
+// mod guard_tests {
+//     use super::*;
+
+//     #[test]
+//     fn test_guard() {
+//         let mut cwd = Cwd::mutex().lock().unwrap();
+//         // let cwd = &mut *cwd;
+//         let _ = std::panic::catch_unwind(|| {
+//             let _ = cwd.set("");
+//             panic!()
+//         });
+//     }
+// }
+
 /// Access to the stack of current working directories used by [`CwdGuard`], you probably want to use
 /// [`CwdGuard`] instead. This is only really useful for cleaning up if the [`Mutex`] if it was poisoned.
 ///
 /// Notably, the mutex may be poisoned if the directory a [`CwdGuard`] should reset to is deleted or
 /// similarly inaccessible when the [`CwdGuard`] is dropped.
-///
-/// ```
-/// # let test_dir =
-/// #     env::temp_dir().join(&(env!("CARGO_PKG_NAME").to_owned() + " cwd_stack_doc_test"));
-/// # if !test_dir.exists() {
-/// #     fs::create_dir(&test_dir)?;
-/// # }
-/// #
-///   use current_dir::prelude::*;
-///   use std::{env, error::Error, fs, thread};
-///
-///   thread::scope(|s| {
-///       s.spawn(|| -> Result<(), Box<dyn Error + Send + Sync>> {
-///           let mut locked_cwd = Cwd::mutex().lock().unwrap();
-///
-///           // delete cwd before the CwdGuard is dropped
-///           locked_cwd.set(&test_dir)?;
-///           let _cwd_guard = CwdGuard::try_from(&mut *locked_cwd)?;
-///           fs::remove_dir(&test_dir)?;
-///
-///           Ok(())
-///       })
-///       .join()
-///   })
-///   .expect_err("thread panicked");
-///
-///   let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-///   let mut poisoned_cwd_stack = CwdStack::from(&mut **poisoned_locked_cwd.get_mut());
-///   assert_eq!(*poisoned_cwd_stack.as_vec(), vec![test_dir.clone()]);
-///
-///   // Fix poisoned cwd
-///   fs::create_dir(test_dir)?;
-///   poisoned_cwd_stack.pop_cwd()?;
-///   let _locked_cwd = poisoned_locked_cwd.into_inner();
-///
-/// # Ok::<_, Box<dyn Error>>(())
-/// ```
 pub struct CwdStack<'lock> {
     /// A reference to the stack of current working directories to handle saving and resetting.
     cwd_stack: &'lock mut Vec<PathBuf>,
@@ -278,20 +262,15 @@ impl<'lock> From<&'lock mut CwdStack<'_>> for CwdStack<'lock> {
 }
 
 #[cfg(test)]
-mod test_utilities;
-
-#[cfg(test)]
-mod tests {
+mod stack_tests {
     use super::*;
-    use core::{iter, ops::Range, time::Duration};
-    use std::{fs, path};
+    use core::{iter, ops::Range};
+    use std::fs;
 
     #[test]
     fn test_stack() {
         const TEST_RANGE: Range<usize> = 1..20;
-        let mut locked_cwd =
-            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
-                .unwrap();
+        let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
 
         let mut cwd_stack = CwdStack::from(&mut *locked_cwd);
         assert!(cwd_stack.as_vec().is_empty());
@@ -327,18 +306,17 @@ mod tests {
 
     #[test]
     fn test_delete_cwd() {
-        let mut locked_cwd =
-            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
-                .unwrap();
-        let mut cwd = test_utilities::reset_cwd(&mut locked_cwd);
-        let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
-        fs::create_dir_all(&test_dir).unwrap();
-        let _clean_up_test_dir = with_drop::with_drop((), |()| fs::remove_dir(&test_dir).unwrap());
+        let rm_test_dir = test_dir!();
+        let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
-        let mut cwd_stack = CwdStack::from(&mut **cwd);
-        cwd_stack.set(&test_dir).unwrap();
+        let cwd = &mut **reset_cwd;
+        let test_dir = rm_test_dir.as_path();
 
-        let mut test_dir_repeat = iter::repeat(test_dir.clone());
+        let mut cwd_stack = CwdStack::from(cwd);
+        cwd_stack.set(test_dir).unwrap();
+
+        let mut test_dir_repeat = iter::repeat(test_dir.to_path_buf());
         let test_dir_repeat_ref = test_dir_repeat.by_ref();
 
         assert!(cwd_stack.as_vec().is_empty());
@@ -358,7 +336,7 @@ mod tests {
             test_dir_repeat_ref.take(3).collect::<Vec<_>>()
         );
 
-        fs::remove_dir(&test_dir).unwrap();
+        fs::remove_dir(test_dir).unwrap();
 
         assert_eq!(
             cwd_stack.pop_cwd().unwrap_err().kind(),
@@ -377,8 +355,8 @@ mod tests {
             test_dir_repeat_ref.take(3).collect::<Vec<_>>()
         );
 
-        fs::create_dir_all(&test_dir).unwrap();
-        cwd_stack.set(&test_dir).unwrap();
+        fs::create_dir_all(test_dir).unwrap();
+        cwd_stack.set(test_dir).unwrap();
 
         cwd_stack.push_cwd().unwrap();
         assert_eq!(
@@ -409,17 +387,15 @@ mod tests {
 
     #[test]
     fn test_pop_empty() {
-        let mut locked_cwd =
-            test_utilities::yield_poison_addressed(Cwd::mutex(), Duration::from_millis(500))
-                .unwrap();
-        let mut cwd = test_utilities::reset_cwd(&mut locked_cwd);
+        let rm_test_dir = test_dir!();
+        let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
-        let test_dir = env::temp_dir().join(called_from!().replace(path::MAIN_SEPARATOR_STR, "|"));
-        fs::create_dir_all(&test_dir).unwrap();
-        let _clean_up_test_dir = with_drop::with_drop((), |()| fs::remove_dir(&test_dir).unwrap());
+        let cwd = &mut **reset_cwd;
+        let test_dir = rm_test_dir.as_path();
 
-        let mut cwd_stack = CwdStack::from(&mut **cwd);
-        cwd_stack.set(&test_dir).unwrap();
+        let mut cwd_stack = CwdStack::from(cwd);
+        cwd_stack.set(test_dir).unwrap();
 
         assert_eq!(cwd_stack.get().unwrap(), test_dir);
         assert!(cwd_stack.as_vec().is_empty());
@@ -428,8 +404,8 @@ mod tests {
         assert!(cwd_stack.as_vec().is_empty());
 
         cwd_stack.push_cwd().unwrap();
-        assert_eq!(*cwd_stack.as_vec(), vec![test_dir.clone()]);
-        assert_eq!(cwd_stack.pop_cwd().unwrap(), Some(test_dir.clone()));
+        assert_eq!(*cwd_stack.as_vec(), vec![test_dir]);
+        assert_eq!(cwd_stack.pop_cwd().unwrap(), Some(test_dir.to_path_buf()));
 
         assert_eq!(cwd_stack.get().unwrap(), test_dir);
         assert!(cwd_stack.as_vec().is_empty());

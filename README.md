@@ -36,18 +36,14 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 
 ## [`CwdGuard`][CwdGuard] Example
 ```rust
-# fn mkdir<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<()> {
-#     let path = path.as_ref();
-#     if !path.exists() {
-#         std::fs::create_dir(path)
-#     } else {
-#         Ok(())
-#     }
-# }
-#
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
       use std::env::temp_dir;
       use current_dir::*;
+#
+#     let test_dirs = temp_dir().join("sub/sub");
+#     if !test_dirs.exists() {
+#         std::fs::create_dir_all(&test_dirs)?;
+#     }
 
       let mut locked_cwd = Cwd::mutex().lock()?;
       locked_cwd.set(temp_dir())?;
@@ -55,13 +51,11 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 #     assert_eq!(locked_cwd.get()?, temp_dir());
       {
           let mut cwd_guard = CwdGuard::try_from(&mut *locked_cwd)?;
-#         mkdir("sub")?;
           cwd_guard.set("sub")?;
           // cwd == /tmp/sub
 #         assert_eq!(cwd_guard.get()?, temp_dir().join("sub"));
           {
               let mut sub_cwd_guard = CwdGuard::try_from(&mut cwd_guard)?;
-#             mkdir("sub")?;
               sub_cwd_guard.set("sub")?;
               // cwd == /tmp/sub/sub
 #             assert_eq!(sub_cwd_guard.get()?, temp_dir().join("sub/sub"));
@@ -84,7 +78,43 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 # }
 ```
 
+## [`CwdStack`][CwdStack] Example
+```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+      use current_dir::*;
+      use std::{env::temp_dir, error::Error, fs, panic};
+
+      let test_dir = temp_dir().join("cwd");
+#     if !test_dir.exists() {
+#         fs::create_dir(&test_dir)?;
+#     }
+
+      panic::catch_unwind(|| {
+          let mut locked_cwd = Cwd::mutex().lock().unwrap();
+          locked_cwd.set(&test_dir)?;
+
+          // removing the CWD before the CwdGuard is dropped will cause a panic on drop.
+          let _cwd_guard = CwdGuard::try_from(&mut *locked_cwd)?;
+          fs::remove_dir(&test_dir)?;
+#
+#         Ok::<_, Box<dyn Error>>(())
+      }).expect_err("panicked");
+
+      let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
+      let mut poisoned_cwd_stack = CwdStack::from(&mut **poisoned_locked_cwd.get_mut());
+#     assert_eq!(*poisoned_cwd_stack.as_vec(), vec![test_dir.clone()]);
+
+      // Fix poisoned cwd
+      fs::create_dir(&test_dir)?;
+      poisoned_cwd_stack.pop_cwd()?;
+      let _locked_cwd = poisoned_locked_cwd.into_inner();
+
+#     Ok(())
+# }
+```
+
 [Cwd]: https://docs.rs/current_dir/latest/current_dir/struct.Cwd.html
 [CwdGuard]: https://docs.rs/current_dir/latest/current_dir/struct.CwdGuard.html
+[CwdStack]: https://docs.rs/current_dir/latest/current_dir/struct.CwdStack.html
 [set_current_dir]: <https://doc.rust-lang.org/stable/std/env/fn.set_current_dir.html> "std::env::set_current_dir()"
 [current_dir]: <https://doc.rust-lang.org/stable/std/env/fn.current_dir.html> "std::env::current_dir()"
