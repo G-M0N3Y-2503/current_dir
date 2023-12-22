@@ -78,8 +78,9 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 # }
 ```
 
-## [`CwdStack`][CwdStack] Example
+## Poison cleanup Example
 ```rust
+#![cfg_attr(all(feature = "unstable", feature = "nightly"), feature(mutex_unpoison))]
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
       use current_dir::*;
       use std::{env::temp_dir, error::Error, fs, panic};
@@ -101,12 +102,14 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
       }).expect_err("panicked");
 
       let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-      let mut poisoned_cwd_stack = CwdStack::from(&mut **poisoned_locked_cwd.get_mut());
-#     assert_eq!(*poisoned_cwd_stack.as_vec(), vec![test_dir.clone()]);
+      let expected_cwd = poisoned_locked_cwd.get_ref().get_expected().unwrap().to_owned();
+#     assert_eq!(expected_cwd, test_dir.clone());
 
       // Fix poisoned cwd
-      fs::create_dir(&test_dir)?;
-      poisoned_cwd_stack.pop_cwd()?;
+      fs::create_dir(&expected_cwd)?;
+      poisoned_locked_cwd.get_mut().set(&expected_cwd)?;
+      #[cfg(all(feature = "unstable", feature = "nightly"))]
+      Cwd::mutex().clear_poison();
       let _locked_cwd = poisoned_locked_cwd.into_inner();
 
 #     Ok(())

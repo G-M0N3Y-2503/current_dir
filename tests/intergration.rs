@@ -1,14 +1,28 @@
+#![cfg_attr(
+    all(feature = "unstable", feature = "nightly"),
+    feature(mutex_unpoison)
+)]
 use current_dir::*;
-use std::{env, fs, panic, path::PathBuf, sync::OnceLock};
+use std::{env, fs, panic, path::PathBuf, sync::{OnceLock, MutexGuard}};
 
 mod test_utilities {
     include!("../src/test_utilities.rs");
 }
 
+#[cfg(test)]
+fn test_mutex<T>(
+    mutex: &std::sync::Mutex<T>,
+) -> Result<
+    (std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>),
+    std::sync::TryLockError<(std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>)>,
+> {
+    test_utilities::yield_test_mutex(mutex, std::time::Duration::from_millis(100))
+}
+
 #[test]
 fn recursive_guards() {
     let rm_test_dir = test_dir!("sub/sub");
-    let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+    let (_test_lock, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
     let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
     let cwd = &mut **reset_cwd;
@@ -37,16 +51,13 @@ fn recursive_guards() {
 }
 
 #[test]
-#[should_panic(
-    expected = "current working directory can be reset to the initial value: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }"
-)]
 fn clean_up_poisend() {
     let rm_test_dir = test_dir!();
     let test_dir = rm_test_dir.as_path();
     let initial_dir = OnceLock::<PathBuf>::new();
 
     let panic = expect_panic!(|| {
-        let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+        let (_test_lock, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         initial_dir.set(locked_cwd.get().unwrap()).unwrap();
 
         // cause panic in `_cwd_guard` drop
@@ -56,28 +67,32 @@ fn clean_up_poisend() {
     });
 
     let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-    let mut poisoned_cwd_stack = CwdStack::from(&mut **poisoned_locked_cwd.get_mut());
-    assert!(!poisoned_cwd_stack.as_vec().is_empty(), "not dirty");
-    assert_eq!(*poisoned_cwd_stack.as_vec(), vec![test_dir]);
+    assert_eq!(
+        panic.downcast_ref::<std::io::Error>().unwrap().to_string(),
+        "No such file or directory (os error 2)"
+    );
+    let expected_cwd = poisoned_locked_cwd
+        .get_ref()
+        .get_expected()
+        .expect("panic sets expected cwd")
+        .to_owned();
+    assert_eq!(expected_cwd, test_dir);
 
     // Fix poisoned cwd
-    fs::create_dir_all(test_dir).unwrap();
-    assert_eq!(
-        poisoned_cwd_stack.pop_cwd().unwrap(),
-        Some(test_dir.to_path_buf())
-    );
-    assert!(poisoned_cwd_stack.as_vec().is_empty());
+    fs::create_dir_all(&expected_cwd).unwrap();
+    poisoned_locked_cwd.get_mut().set(&expected_cwd).unwrap();
+    #[cfg(all(feature = "unstable", feature = "nightly"))]
+    Cwd::mutex().clear_poison();
     let mut locked_cwd = poisoned_locked_cwd.into_inner();
+    assert_eq!(locked_cwd.get_expected().unwrap(), expected_cwd);
 
     locked_cwd.set(initial_dir.get().unwrap()).unwrap();
-
-    panic::resume_unwind(panic);
 }
 
 #[test]
 fn sub_guard_drop_panic_exception_safe() {
     let rm_test_dir = test_dir!("sub/sub");
-    let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+    let (_test_lock, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
     let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
     let cwd = &mut **reset_cwd;
@@ -106,9 +121,8 @@ fn sub_guard_drop_panic_exception_safe() {
         panic::resume_unwind(panic);
     });
     assert_eq!(
-        panic
-        .downcast_ref(),
-        Some(&String::from("current working directory can be reset to the initial value: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }"))
+        panic.downcast_ref::<std::io::Error>().unwrap().to_string(),
+        "No such file or directory (os error 2)"
     );
     assert_eq!(cwd.get().unwrap(), *test_dir);
 }
@@ -116,7 +130,7 @@ fn sub_guard_drop_panic_exception_safe() {
 #[test]
 fn guard_drop_panic_dirty_exception_safe() {
     let rm_test_dir = test_dir!("sub");
-    let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+    let (_test_lock, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
     let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
     let cwd = &mut **reset_cwd;
@@ -134,22 +148,21 @@ fn guard_drop_panic_dirty_exception_safe() {
         fs::remove_dir_all(test_dir.join("sub")).unwrap();
     });
     assert_eq!(
-        panic
-        .downcast_ref(),
-        Some(&String::from("current working directory can be reset to the initial value: Os { code: 2, kind: NotFound, message: \"No such file or directory\" }"))
+        panic.downcast_ref::<std::io::Error>().unwrap().to_string(),
+        "No such file or directory (os error 2)"
     );
     assert_eq!(cwd.get().unwrap(), *test_dir);
-    let mut stack = CwdStack::from(&mut *cwd);
-    assert_eq!(*stack.as_vec(), vec![test_dir.join("sub")]);
-    fs::create_dir(stack.as_vec().last().unwrap()).unwrap();
-    stack.pop_cwd().unwrap();
-    assert_eq!(cwd.get().unwrap(), test_dir.join("sub"));
+    let expected_cwd = cwd.get_expected().unwrap().to_owned();
+    assert_eq!(*expected_cwd, test_dir.join("sub"));
+    fs::create_dir(&expected_cwd).unwrap();
+    cwd.set(&expected_cwd).unwrap();
+    assert_eq!(cwd.get().unwrap(), expected_cwd);
 }
 
 #[test]
 fn external_panic_exception_safe() {
     let rm_test_dir = test_dir!("sub");
-    let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+    let (_test_lock, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
     let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
     let cwd = &mut **reset_cwd;
@@ -174,9 +187,11 @@ fn external_panic_mutex_dropped_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     let test_dir = rm_test_dir.as_path();
     let initial_dir = OnceLock::<PathBuf>::new();
+    let test_lock= OnceLock::<MutexGuard<()>>::new();
 
     let panic = expect_panic!(|| {
-        let mut locked_cwd = test_utilities::yield_poison_addressed(Cwd::mutex()).unwrap();
+        let (test, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        test_lock.set(test);
         let cwd = &mut *locked_cwd;
         initial_dir.set(cwd.get().unwrap()).unwrap();
 
@@ -198,6 +213,8 @@ fn external_panic_mutex_dropped_exception_safe() {
     assert_eq!(panic.downcast_ref(), Some(&"external panic"));
 
     let poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
+    #[cfg(all(feature = "unstable", feature = "nightly"))]
+    Cwd::mutex().clear_poison();
     let mut cwd = poisoned_locked_cwd.into_inner();
     assert_eq!(cwd.get().unwrap(), test_dir.join("sub"));
 

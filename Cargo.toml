@@ -9,5 +9,9 @@ readme = "README.md"
 keywords = ["async", "cwd", "filesystem", "test", "thread"]
 categories = ["concurrency", "development-tools::testing", "filesystem"]
 
+[features]
+full_expected_cwd = []
+unstable = []
+
 [dev-dependencies]
 with_drop = "0.0.3"

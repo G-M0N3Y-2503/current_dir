@@ -6,4 +6,3 @@ use super::*;
 pub trait Sealed {}
 impl Sealed for Cwd {}
 impl Sealed for CwdGuard<'_> {}
-impl Sealed for CwdStack<'_> {}

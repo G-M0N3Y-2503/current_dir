@@ -1,8 +1,8 @@
 use core::time::Duration;
 use std::{
     env::temp_dir,
-    panic::{self, resume_unwind},
-    sync::{Mutex, MutexGuard},
+    panic,
+    sync::{Mutex, MutexGuard, PoisonError, TryLockError, TryLockResult},
     thread::yield_now,
     time::Instant,
 };
@@ -124,32 +124,102 @@ fn test_test_dir() {
     assert!(!test_dir_with_subs_2_path.exists());
 }
 
-/// Global timeout accounting for the duration the [`Cwd`] may be locked for and the duration to clean up poisoned [`Cwd`]s.
-static YIELD_POISON_ADDRESSED_TIMEOUT: Duration = Duration::from_millis(500);
+pub static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
-/// Returns the locked and un-poisoned [`Cwd`] or, [yields](yield_now) for up to [`YIELD_POISON_ADDRESSED_TIMEOUT`]
-/// until the poisoned [`Cwd`] has been addressed and can be locked.
-/// Otherwise, errors with a timeout.
-pub fn yield_poison_addressed(mutex: &Mutex<Cwd>) -> Result<MutexGuard<'_, Cwd>, String> {
-    let now = Instant::now();
-    loop {
-        match mutex.lock() {
-            Ok(locked_cwd) => break Ok(locked_cwd),
-            Err(poisoned_locked_cwd) => {
-                let mut locked_cwd = poisoned_locked_cwd.into_inner();
-                if CwdStack::from(&mut *locked_cwd).as_vec().is_empty() {
-                    break Ok(locked_cwd);
-                } else if now.elapsed() > YIELD_POISON_ADDRESSED_TIMEOUT {
-                    break Err(format!(
-                        "acquiring addressed lock timed out after {}s",
-                        YIELD_POISON_ADDRESSED_TIMEOUT.as_secs_f64()
-                    ));
-                } else {
-                    yield_now();
-                }
-            }
+/// Locks the given mutex only if the static test mutex can also be locked.
+pub fn test_locked_mutex<'test_locked, 'mutex, T>(
+    mutex: &'mutex Mutex<T>,
+    test_lock: Option<MutexGuard<'test_locked, ()>>,
+) -> TryLockResult<(MutexGuard<'test_locked, ()>, MutexGuard<'mutex, T>)> {
+    match (TEST_MUTEX.try_lock(), mutex.try_lock()) {
+        (Ok(locked_test), Ok(locked_mutex)) => Ok((locked_test, locked_mutex)),
+        (Err(TryLockError::WouldBlock), _) | (_, Err(TryLockError::WouldBlock)) => {
+            Err(TryLockError::WouldBlock)
+        }
+        (locked_test_res, Err(TryLockError::Poisoned(poisoned_locked_mutex))) => {
+            Err(TryLockError::Poisoned(PoisonError::new((
+                match locked_test_res {
+                    Ok(locked_test) => locked_test,
+                    Err(TryLockError::Poisoned(poisoned_locked_test)) => {
+                        poisoned_locked_test.into_inner()
+                    }
+                    Err(TryLockError::WouldBlock) => unreachable!(),
+                },
+                poisoned_locked_mutex.into_inner(),
+            ))))
+        }
+        (Err(TryLockError::Poisoned(poisoned_locked_test)), Ok(locked_mutex)) => {
+            Ok((poisoned_locked_test.into_inner(), locked_mutex))
         }
     }
+}
+
+/// locks mutexes as per [`test_mutex()`] but [`yield_now()`] up to `timeout` if [`test_mutex()`] would block.
+pub fn yield_test_locked_mutex<T>(
+    mutex: &Mutex<T>,
+    timeout: Duration,
+) -> TryLockResult<(MutexGuard<'_, ()>, MutexGuard<'_, T>)> {
+    let start = Instant::now();
+    loop {
+        match test_locked_mutex(mutex) {
+            Err(TryLockError::WouldBlock) if start.elapsed() < timeout => yield_now(),
+            res => return res,
+        }
+    }
+}
+
+#[test]
+fn test_test_locked_mutex() {
+    let mutex = Mutex::new(true);
+
+    let (locked_test, locked_mutex) = yield_test_locked_mutex(&mutex, Duration::MAX)
+        .expect("test lock should never return poisoned");
+    assert!(matches!(
+        yield_test_locked_mutex(&mutex, Duration::from_millis(1)),
+        Err(TryLockError::WouldBlock)
+    ));
+
+    drop(locked_mutex);
+    assert!(matches!(
+        yield_test_locked_mutex(&mutex, Duration::from_millis(1)),
+        Err(TryLockError::WouldBlock)
+    ));
+
+    let locked_mutex = mutex.lock().unwrap();
+    assert!(matches!(
+        yield_test_locked_mutex(&mutex, Duration::from_millis(1)),
+        Err(TryLockError::WouldBlock)
+    ));
+
+    drop(locked_test);
+    assert!(matches!(
+        yield_test_locked_mutex(&mutex, Duration::from_millis(1)),
+        Err(TryLockError::WouldBlock)
+    ));
+
+    drop(locked_mutex);
+    let (_locked_test, _locked_mutex) = yield_test_locked_mutex(&mutex, Duration::MAX)
+        .expect("test lock should never return poisoned");
+}
+
+#[test]
+fn test_test_locked_mutex_not_poisoned() {
+    let mutex = Mutex::new(true);
+
+    expect_panic!(|| {
+        let _locks = yield_test_locked_mutex(&mutex, Duration::MAX)
+            .expect("test lock should never return poisoned");
+        panic!();
+    });
+
+    assert!(matches!(
+        yield_test_locked_mutex(&mutex, Duration::MAX),
+        Err(TryLockError::Poisoned(_))
+    ));
+
+    let mutex = Mutex::new(true);
+    let _locks = yield_test_locked_mutex(&mutex, Duration::MAX)
+        .expect("test lock should never return poisoned");
 }
 
 /// Returns the `locked_cwd` that will reset to the current working directory when dropped.
@@ -167,7 +237,7 @@ pub fn reset_cwd(locked_cwd: &mut Cwd) -> WithDrop<&mut Cwd, impl FnOnce(&mut Cw
 
 #[test]
 fn test_reset_cwd() {
-    let mut locked_cwd_guard = yield_poison_addressed(Cwd::mutex()).unwrap();
+    let (_, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
 
@@ -182,9 +252,8 @@ fn test_reset_cwd() {
 }
 
 #[test]
-#[should_panic(expected = "test panic")]
 fn test_reset_cwd_panic() {
-    let mut locked_cwd_guard = yield_poison_addressed(Cwd::mutex()).unwrap();
+    let (_, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
     let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);
@@ -195,7 +264,7 @@ fn test_reset_cwd_panic() {
         assert_eq!(locked_cwd.get().unwrap(), temp_dir());
         panic!("test panic")
     });
+    assert_eq!(test_cwd_panic.downcast_ref(), Some(&"test panic"));
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
-    resume_unwind(test_cwd_panic);
 }
