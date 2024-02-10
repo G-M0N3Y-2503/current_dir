@@ -2,7 +2,7 @@ use core::time::Duration;
 use std::{
     env::temp_dir,
     panic,
-    sync::{Mutex, MutexGuard, PoisonError, TryLockError, TryLockResult},
+    sync::{Mutex, MutexGuard, TryLockError, TryLockResult},
     thread::yield_now,
     time::Instant,
 };
@@ -124,46 +124,80 @@ fn test_test_dir() {
     assert!(!test_dir_with_subs_2_path.exists());
 }
 
-pub static TEST_MUTEX: Mutex<()> = Mutex::new(());
+/// Useful for mutually exclusive tests
+pub static STATIC_MUTEX: Mutex<()> = Mutex::new(());
 
-/// Locks the given mutex only if the static test mutex can also be locked.
-pub fn test_locked_mutex<'test_locked, 'mutex, T>(
+/// Locks mutex as per [`Mutex::try_lock()`] but ignores any poison errors
+pub fn try_lock_poisoned<'mutex, T>(
     mutex: &'mutex Mutex<T>,
-    test_lock: Option<MutexGuard<'test_locked, ()>>,
-) -> TryLockResult<(MutexGuard<'test_locked, ()>, MutexGuard<'mutex, T>)> {
-    match (TEST_MUTEX.try_lock(), mutex.try_lock()) {
-        (Ok(locked_test), Ok(locked_mutex)) => Ok((locked_test, locked_mutex)),
-        (Err(TryLockError::WouldBlock), _) | (_, Err(TryLockError::WouldBlock)) => {
-            Err(TryLockError::WouldBlock)
+) -> TryLockResult<MutexGuard<'mutex, T>> {
+    match mutex.try_lock() {
+        Err(TryLockError::Poisoned(poisoned_locked_mutex)) => {
+            Ok(poisoned_locked_mutex.into_inner())
         }
-        (locked_test_res, Err(TryLockError::Poisoned(poisoned_locked_mutex))) => {
-            Err(TryLockError::Poisoned(PoisonError::new((
-                match locked_test_res {
-                    Ok(locked_test) => locked_test,
-                    Err(TryLockError::Poisoned(poisoned_locked_test)) => {
-                        poisoned_locked_test.into_inner()
-                    }
-                    Err(TryLockError::WouldBlock) => unreachable!(),
-                },
-                poisoned_locked_mutex.into_inner(),
-            ))))
-        }
-        (Err(TryLockError::Poisoned(poisoned_locked_test)), Ok(locked_mutex)) => {
-            Ok((poisoned_locked_test.into_inner(), locked_mutex))
+        res => res,
+    }
+}
+
+/// locks mutexes as per [`try_lock_poisoned()`] but [`yield_now()`] up to `timeout` if [`try_lock_poisoned()`] would block.
+pub fn yield_lock_poisoned<T>(
+    mutex: &Mutex<T>,
+    timeout: Duration,
+) -> TryLockResult<MutexGuard<'_, T>> {
+    let start = Instant::now();
+    loop {
+        match try_lock_poisoned(mutex) {
+            Err(TryLockError::WouldBlock) if start.elapsed() < timeout => yield_now(),
+            res => return res,
         }
     }
 }
 
-/// locks mutexes as per [`test_mutex()`] but [`yield_now()`] up to `timeout` if [`test_mutex()`] would block.
+// /// Locks the given mutex only if the static test mutex can also be locked.
+// pub fn test_locked_mutex<'test_locked, 'mutex, T>(
+//     mutex: &'mutex Mutex<T>,
+//     test_lock: Option<MutexGuard<'test_locked, ()>>,
+// ) -> TryLockResult<(MutexGuard<'test_locked, ()>, MutexGuard<'mutex, T>)> {
+//     match (STATIC_MUTEX.try_lock(), mutex.try_lock()) {
+//         (Ok(locked_test), Ok(locked_mutex)) => Ok((locked_test, locked_mutex)),
+//         (Err(TryLockError::WouldBlock), _) | (_, Err(TryLockError::WouldBlock)) => {
+//             Err(TryLockError::WouldBlock)
+//         }
+//         (locked_test_res, Err(TryLockError::Poisoned(poisoned_locked_mutex))) => {
+//             Err(TryLockError::Poisoned(PoisonError::new((
+//                 match locked_test_res {
+//                     Ok(locked_test) => locked_test,
+//                     Err(TryLockError::Poisoned(poisoned_locked_test)) => {
+//                         poisoned_locked_test.into_inner()
+//                     }
+//                     Err(TryLockError::WouldBlock) => unreachable!(),
+//                 },
+//                 poisoned_locked_mutex.into_inner(),
+//             ))))
+//         }
+//         (Err(TryLockError::Poisoned(poisoned_locked_test)), Ok(locked_mutex)) => {
+//             Ok((poisoned_locked_test.into_inner(), locked_mutex))
+//         }
+//     }
+// }
+
+/// locks [`STATIC_MUTEX`] and the given `mutex` as per [`try_lock_poisoned()`] but [`yield_now()`] up to `timeout` if the mutexes would block.
 pub fn yield_test_locked_mutex<T>(
     mutex: &Mutex<T>,
     timeout: Duration,
 ) -> TryLockResult<(MutexGuard<'_, ()>, MutexGuard<'_, T>)> {
     let start = Instant::now();
     loop {
-        match test_locked_mutex(mutex) {
-            Err(TryLockError::WouldBlock) if start.elapsed() < timeout => yield_now(),
-            res => return res,
+        match (try_lock_poisoned(&STATIC_MUTEX), try_lock_poisoned(mutex)) {
+            (Err(TryLockError::WouldBlock), _) | (_, Err(TryLockError::WouldBlock)) => {
+                if start.elapsed() < timeout {
+                    yield_now()
+                }
+            }
+            (Err(TryLockError::Poisoned(_)), _) | (_, Err(TryLockError::Poisoned(_))) => {
+                unreachable!()
+            }
+            (Ok(locked_test), Ok(locked_mutex)) => return Ok((locked_test, locked_mutex)),
         }
     }
 }

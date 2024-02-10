@@ -3,7 +3,13 @@
     feature(mutex_unpoison)
 )]
 use current_dir::*;
-use std::{env, fs, panic, path::PathBuf, sync::{OnceLock, MutexGuard}};
+use std::{
+    env, fs, panic,
+    path::PathBuf,
+    sync::{MutexGuard, OnceLock},
+};
+
+use crate::test_utilities::yield_lock_poisoned;
 
 mod test_utilities {
     include!("../src/test_utilities.rs");
@@ -16,7 +22,7 @@ fn test_mutex<T>(
     (std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>),
     std::sync::TryLockError<(std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>)>,
 > {
-    test_utilities::yield_test_mutex(mutex, std::time::Duration::from_millis(100))
+    test_utilities::yield_test_locked_mutex(mutex, std::time::Duration::from_millis(100))
 }
 
 #[test]
@@ -187,11 +193,15 @@ fn external_panic_mutex_dropped_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     let test_dir = rm_test_dir.as_path();
     let initial_dir = OnceLock::<PathBuf>::new();
-    let test_lock= OnceLock::<MutexGuard<()>>::new();
+    let (_test_lock, _test) = test_mutex(Cwd::mutex()).unwrap();
+
+    let _panic = expect_panic!(|| panic!());
+
+    drop(_test);
 
     let panic = expect_panic!(|| {
-        let (test, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        test_lock.set(test);
+        let mut locked_cwd =
+            yield_lock_poisoned(Cwd::mutex(), std::time::Duration::from_millis(100)).unwrap();
         let cwd = &mut *locked_cwd;
         initial_dir.set(cwd.get().unwrap()).unwrap();
 
