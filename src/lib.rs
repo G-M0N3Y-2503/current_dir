@@ -123,7 +123,7 @@ impl Cwd {
         env::current_dir().map(|path| {
             if cfg!(feature = "full_expected_cwd") && clone_cell_value(&self.expected_cwd).is_none()
             {
-                self.expected_cwd.set(Some(path.clone()))
+                self.expected_cwd.set(Some(path.clone()));
             };
             path
         })
@@ -135,7 +135,7 @@ impl Cwd {
     pub fn set<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         env::set_current_dir(&path).map(|()| {
             if cfg!(feature = "full_expected_cwd") {
-                self.expected_cwd.set(Some(path.as_ref().to_path_buf()))
+                self.expected_cwd.set(Some(path.as_ref().to_path_buf()));
             }
         })
     }
@@ -156,7 +156,7 @@ mod full_expected_cwd_tests {
     #[test]
     #[ignore = "Test needs to be run standalone"]
     fn test_get_expected_inits_expected() {
-        let (_, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
 
         assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
         cwd.get_expected().unwrap();
@@ -169,7 +169,7 @@ mod full_expected_cwd_tests {
     #[test]
     #[ignore = "Test needs to be run standalone"]
     fn test_get_inits_expected() {
-        let (_, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
 
         assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
         cwd.get().unwrap();
@@ -183,7 +183,7 @@ mod full_expected_cwd_tests {
     #[ignore = "Test needs to be run standalone"]
     fn test_set_inits_expected() {
         let test_dir = test_dir!();
-        let (_, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
 
         assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
         cwd.set(&*test_dir).unwrap();
@@ -196,7 +196,7 @@ mod full_expected_cwd_tests {
     #[test]
     fn test_unexpected_set() {
         let test_dir = test_dir!("dir1");
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
         let cwd = &mut **reset_cwd;
 
@@ -235,7 +235,7 @@ mod cwd_bench {
 
     #[bench]
     fn bench_get(b: &mut test::Bencher) {
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
         let cwd = &mut **reset_cwd;
 
@@ -245,7 +245,7 @@ mod cwd_bench {
     #[bench]
     fn bench_set(b: &mut test::Bencher) {
         let test_dir = test_dir!();
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
         let cwd = &mut **reset_cwd;
 
@@ -255,7 +255,7 @@ mod cwd_bench {
     #[bench]
     fn bench_set_and_get(b: &mut test::Bencher) {
         let test_dir = test_dir!();
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
         let cwd = &mut **reset_cwd;
 
@@ -348,7 +348,7 @@ mod guard_tests {
     #[test]
     fn test_guard_reset() {
         let test_dir = test_dir!();
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
         let cwd = &mut **reset_cwd;
@@ -375,7 +375,7 @@ mod guard_tests {
     #[test]
     fn test_guard_drop() {
         let test_dir = test_dir!();
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
         let cwd = &mut **reset_cwd;
@@ -408,7 +408,7 @@ mod guard_tests {
     #[test]
     fn test_guard_recursive() {
         let test_dir = test_dir!("dir1/dir2");
-        let (_, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
+        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
         let cwd = &mut **reset_cwd;
 

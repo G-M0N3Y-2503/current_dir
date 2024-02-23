@@ -271,7 +271,7 @@ pub fn reset_cwd(locked_cwd: &mut Cwd) -> WithDrop<&mut Cwd, impl FnOnce(&mut Cw
 
 #[test]
 fn test_reset_cwd() {
-    let (_, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
+    let (_unused, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
 
@@ -287,7 +287,7 @@ fn test_reset_cwd() {
 
 #[test]
 fn test_reset_cwd_panic() {
-    let (_, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
+    let (_unused, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
     let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);
