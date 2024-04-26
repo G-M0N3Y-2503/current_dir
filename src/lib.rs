@@ -32,10 +32,13 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(all(feature = "unstable", feature = "nightly"), feature(test))]
 
-use std::{
+use core::{
     cell::Cell,
-    env, io,
+    fmt,
     ops::{Deref, DerefMut},
+};
+use std::{
+    env, io,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -46,13 +49,31 @@ mod sealed;
 mod test_utilities;
 
 #[cfg(test)]
+#[macro_export]
+macro_rules! cwd_test {
+    ($test:expr) => {
+        mutex_thread!(
+            || {
+                test_utilities::yield_lock_poisoned(
+                    Cwd::mutex(),
+                    core::time::Duration::from_millis(100),
+                )
+                .map($test)
+            },
+            core::time::Duration::from_millis(100)
+        )
+        .expect("cwd_test ran within 100ms")
+    };
+}
+
+#[cfg(test)]
 fn test_mutex<T>(
     mutex: &Mutex<T>,
 ) -> Result<
     (std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>),
     std::sync::TryLockError<(std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>)>,
 > {
-    test_utilities::yield_test_locked_mutex(mutex, std::time::Duration::from_millis(100))
+    test_utilities::yield_test_locked_mutex(mutex, core::time::Duration::from_millis(100))
 }
 
 fn clone_cell_value<T: Default + Clone>(cell: &Cell<T>) -> T {
@@ -68,9 +89,9 @@ mod cell_test {
 
     #[test]
     fn test_clone_cell_value() {
-        let cell = Cell::new(Some(58));
-        assert_eq!(clone_cell_value(&cell), Some(58));
-        assert_eq!(cell, Cell::new(Some(58)));
+        let cell = Cell::new(Some(58i32));
+        assert_eq!(clone_cell_value(&cell), Some(58i32));
+        assert_eq!(cell, Cell::new(Some(58i32)));
         cell.set(None);
         assert_eq!(clone_cell_value(&cell), None);
         assert_eq!(cell, Cell::new(None));
@@ -140,9 +161,9 @@ impl Cwd {
         })
     }
 }
-impl std::fmt::Debug for Cwd {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Cwd")
+impl fmt::Debug for Cwd {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt.debug_struct("Cwd")
             .field("expected_cwd", &clone_cell_value(&self.expected_cwd))
             .finish()
     }
@@ -157,7 +178,7 @@ mod full_expected_cwd_tests {
     #[ignore = "Test needs to be run standalone"]
     fn test_get_expected_inits_expected() {
         let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
-
+        cwd_test!(|cwd| { Ok(()) });
         assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
         cwd.get_expected().unwrap();
         assert_eq!(

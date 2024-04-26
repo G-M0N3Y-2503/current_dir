@@ -3,7 +3,7 @@ use std::{
     env::temp_dir,
     panic,
     sync::{Mutex, MutexGuard, TryLockError, TryLockResult},
-    thread::yield_now,
+    thread::{self, yield_now},
     time::Instant,
 };
 use with_drop::*;
@@ -31,42 +31,59 @@ fn test_called_from() {
     assert_ne!(left, right);
 }
 
-/// Spawns the function in a new thread and expects that function to panic.
+/// Spawns the function in a new thread.
 #[macro_export]
-macro_rules! expect_panic {
-    ($f:expr) => {
+macro_rules! thread {
+    ($name:expr, $f:expr) => {
         std::thread::scope(|scope| {
             std::thread::Builder::new()
-                .name(format!("expect_panic in {}", called_from!()))
+                .name($name)
                 .spawn_scoped(scope, $f)
                 .expect("failed to spawn thread")
                 .join()
         })
-        .expect_err("function panicked")
+    };
+    ($f:expr) => {
+        thread!(format!("thread spawned at {}", called_from!()), $f)
     };
 }
 
 #[test]
-fn test_expect_panic() {
+fn test_thread() {
+    assert_eq!(thread!(|| { Ok::<(), ()>(()) }).unwrap(), Ok(()));
+
     assert_eq!(
-        expect_panic!(|| panic!("str panic")).downcast_ref(),
+        thread!("named thread".to_owned(), || Ok::<(), ()>(())).unwrap(),
+        Ok(())
+    );
+
+    assert_eq!(
+        thread!(|| panic!("str panic"))
+            .expect_err("panicked")
+            .downcast_ref(),
         Some(&"str panic")
     );
 
     assert_eq!(
-        expect_panic!(|| panic::panic_any(58i32)).downcast_ref(),
+        thread!(|| panic::panic_any(58i32))
+            .expect_err("panicked")
+            .downcast_ref(),
         Some(&58i32)
     );
 
     let mv = String::from("panic String");
     assert_eq!(
-        expect_panic!(|| panic::panic_any(mv)).downcast_ref(),
+        thread!(|| panic::panic_any(mv))
+            .expect_err("panicked")
+            .downcast_ref(),
         Some(&String::from("panic String"))
     );
 
     let by_ref = "panic &str";
     assert_eq!(
-        expect_panic!(|| panic::panic_any(by_ref)).downcast_ref(),
+        thread!(|| panic::panic_any(by_ref))
+            .expect_err("panicked")
+            .downcast_ref(),
         Some(&"panic &str")
     );
     assert_eq!(by_ref, by_ref);
@@ -124,31 +141,23 @@ fn test_test_dir() {
     assert!(!test_dir_with_subs_2_path.exists());
 }
 
-/// Useful for mutually exclusive tests
-pub static STATIC_MUTEX: Mutex<()> = Mutex::new(());
-
-/// Locks mutex as per [`Mutex::try_lock()`] but ignores any poison errors
-pub fn try_lock_poisoned<'mutex, T>(
-    mutex: &'mutex Mutex<T>,
-) -> TryLockResult<MutexGuard<'mutex, T>> {
+pub fn try_lock_poisoned<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
     match mutex.try_lock() {
+        Ok(locked_mutex) => Some(locked_mutex),
         Err(TryLockError::Poisoned(poisoned_locked_mutex)) => {
-            Ok(poisoned_locked_mutex.into_inner())
+            Some(poisoned_locked_mutex.into_inner())
         }
-        res => res,
+        Err(TryLockError::WouldBlock) => None,
     }
 }
 
 /// locks mutexes as per [`try_lock_poisoned()`] but [`yield_now()`] up to `timeout` if [`try_lock_poisoned()`] would block.
-pub fn yield_lock_poisoned<T>(
-    mutex: &Mutex<T>,
-    timeout: Duration,
-) -> TryLockResult<MutexGuard<'_, T>> {
+pub fn yield_lock_poisoned<T>(mutex: &Mutex<T>, timeout: Duration) -> Option<MutexGuard<'_, T>> {
     let start = Instant::now();
     loop {
         match try_lock_poisoned(mutex) {
-            Err(TryLockError::WouldBlock) if start.elapsed() < timeout => yield_now(),
-            res => return res,
+            None if start.elapsed() < timeout => yield_now(),
+            res => break res,
         }
     }
 }
@@ -181,6 +190,64 @@ pub fn yield_lock_poisoned<T>(
 //     }
 // }
 
+pub static STATIC_MUTEX: Mutex<()> = Mutex::new(());
+#[macro_export]
+macro_rules! mutex_thread {
+    ($test:expr, $timeout:expr) => {
+        test_utilities::yield_lock_poisoned(&test_utilities::STATIC_MUTEX, $timeout)
+            .map(|_lock| thread!(format!("mutex_test at {}", called_from!()), $test))
+    };
+}
+
+#[test]
+fn test_mutex_tests() {
+    static BLOCK_TEST: Mutex<bool> = Mutex::new(false);
+    let t1 = thread::spawn(|| {
+        assert_eq!(
+            mutex_thread!(
+                || {
+                    *BLOCK_TEST.lock().unwrap() = true;
+                    while *BLOCK_TEST.lock().unwrap() {
+                        yield_now();
+                    }
+
+                    panic!("explicit panic")
+                },
+                Duration::from_millis(1)
+            )
+            .expect("acquired mutual exclusion")
+            .expect_err("thread pannicked")
+            .downcast_ref(),
+            Some(&"explicit panic")
+        )
+    });
+
+    thread::spawn(|| {
+        let mut blocked = loop {
+            match BLOCK_TEST.lock().unwrap() {
+                blocked if *blocked => break blocked,
+                _ => yield_now(),
+            }
+        };
+
+        assert!(matches!(
+            mutex_thread!(|| {}, Duration::from_millis(1))
+                .("could not acquired mutual exclusion"),
+            TryLockError::WouldBlock
+        ));
+
+        *blocked = false;
+    })
+    .join()
+    .expect("thread didn't panicked");
+
+    t1.join().expect("thread didn't panicked");
+
+    mutex_thread!(|| {}, Duration::from_millis(1))
+        .expect("acquired mutual exclusion")
+        .expect("test didn't panic");
+}
+
 /// locks [`STATIC_MUTEX`] and the given `mutex` as per [`try_lock_poisoned()`] but [`yield_now()`] up to `timeout` if the mutexes would block.
 pub fn yield_test_locked_mutex<T>(
     mutex: &Mutex<T>,
@@ -191,7 +258,7 @@ pub fn yield_test_locked_mutex<T>(
         match (try_lock_poisoned(&STATIC_MUTEX), try_lock_poisoned(mutex)) {
             (Err(TryLockError::WouldBlock), _) | (_, Err(TryLockError::WouldBlock)) => {
                 if start.elapsed() < timeout {
-                    yield_now()
+                    yield_now();
                 }
             }
             (Err(TryLockError::Poisoned(_)), _) | (_, Err(TryLockError::Poisoned(_))) => {
@@ -240,11 +307,12 @@ fn test_test_locked_mutex() {
 fn test_test_locked_mutex_not_poisoned() {
     let mutex = Mutex::new(true);
 
-    expect_panic!(|| {
+    thread!(|| {
         let _locks = yield_test_locked_mutex(&mutex, Duration::MAX)
             .expect("test lock should never return poisoned");
         panic!();
-    });
+    })
+    .expect_err("panicked");
 
     assert!(matches!(
         yield_test_locked_mutex(&mutex, Duration::MAX),
@@ -271,7 +339,8 @@ pub fn reset_cwd(locked_cwd: &mut Cwd) -> WithDrop<&mut Cwd, impl FnOnce(&mut Cw
 
 #[test]
 fn test_reset_cwd() {
-    let (_unused, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
+    let (_unused, mut locked_cwd_guard) =
+        yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
 
@@ -287,17 +356,19 @@ fn test_reset_cwd() {
 
 #[test]
 fn test_reset_cwd_panic() {
-    let (_unused, mut locked_cwd_guard) = yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
+    let (_unused, mut locked_cwd_guard) =
+        yield_test_locked_mutex(Cwd::mutex(), Duration::MAX).unwrap();
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
     let mut locked_cwd = reset_cwd(&mut locked_cwd_guard);
     assert_ne!(locked_cwd.get().unwrap(), temp_dir());
 
-    let test_cwd_panic = expect_panic!(move || {
+    let test_cwd_panic = thread!(move || {
         locked_cwd.set(temp_dir()).unwrap();
         assert_eq!(locked_cwd.get().unwrap(), temp_dir());
         panic!("test panic")
-    });
+    })
+    .expect_err("panicked");
     assert_eq!(test_cwd_panic.downcast_ref(), Some(&"test panic"));
 
     assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
