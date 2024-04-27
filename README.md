@@ -1,4 +1,4 @@
-# current_dir
+# `current_dir`
 A utility crate that helps using [`set_current_dir()`][set_current_dir] and [`current_dir()`][current_dir] in a thread safe manner.<br>
 This is generally useful for `#[test]`s that depend on different current working directories each as they are run in multiple threads by default.
 
@@ -80,7 +80,6 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 
 ## Poison cleanup Example
 ```rust
-#![cfg_attr(all(feature = "unstable", feature = "nightly"), feature(mutex_unpoison))]
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
       use current_dir::*;
       use std::{env::temp_dir, error::Error, fs, panic};
@@ -108,7 +107,6 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
       // Fix poisoned cwd
       fs::create_dir(&expected_cwd)?;
       poisoned_locked_cwd.get_mut().set(&expected_cwd)?;
-      #[cfg(all(feature = "unstable", feature = "nightly"))]
       Cwd::mutex().clear_poison();
       let _locked_cwd = poisoned_locked_cwd.into_inner();
 

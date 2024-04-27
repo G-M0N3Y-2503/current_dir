@@ -49,31 +49,28 @@ mod sealed;
 mod test_utilities;
 
 #[cfg(test)]
-#[macro_export]
-macro_rules! cwd_test {
-    ($test:expr) => {
-        mutex_thread!(
-            || {
-                test_utilities::yield_lock_poisoned(
-                    Cwd::mutex(),
-                    core::time::Duration::from_millis(100),
-                )
-                .map($test)
-            },
-            core::time::Duration::from_millis(100)
+macro_rules! mutex_test {
+    ($mutex:expr, $test:expr, $timeout:expr) => {
+        assert!(
+            mutex_block!(
+                {
+                    assert!(
+                        test_utilities::yield_lock_poisoned($mutex, $timeout)
+                            .map($test)
+                            .is_some(),
+                        "test acquired Cwd lock within {}s",
+                        $timeout.as_secs_f64()
+                    )
+                },
+                $timeout
+            ).is_some(),
+            "test acquired mutual exclusion within {}s",
+            $timeout.as_secs()
         )
-        .expect("cwd_test ran within 100ms")
     };
-}
-
-#[cfg(test)]
-fn test_mutex<T>(
-    mutex: &Mutex<T>,
-) -> Result<
-    (std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>),
-    std::sync::TryLockError<(std::sync::MutexGuard<'_, ()>, std::sync::MutexGuard<'_, T>)>,
-> {
-    test_utilities::yield_test_locked_mutex(mutex, core::time::Duration::from_millis(100))
+    ($($args:tt)+) => {
+        mutex_test!($($args)+, core::time::Duration::from_millis(100))
+    };
 }
 
 fn clone_cell_value<T: Default + Clone>(cell: &Cell<T>) -> T {
@@ -177,74 +174,87 @@ mod full_expected_cwd_tests {
     #[test]
     #[ignore = "Test needs to be run standalone"]
     fn test_get_expected_inits_expected() {
-        let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
-        cwd_test!(|cwd| { Ok(()) });
-        assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
-        cwd.get_expected().unwrap();
-        assert_eq!(
-            *cwd.expected_cwd.get_mut(),
-            Some(env::current_dir().unwrap())
-        );
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            assert_eq!(
+                *locked_cwd.expected_cwd.get_mut(),
+                None,
+                "test not run standalone"
+            );
+            locked_cwd.get_expected().unwrap();
+            assert_eq!(
+                *locked_cwd.expected_cwd.get_mut(),
+                Some(env::current_dir().unwrap())
+            );
+        });
     }
 
     #[test]
     #[ignore = "Test needs to be run standalone"]
     fn test_get_inits_expected() {
-        let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
-
-        assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
-        cwd.get().unwrap();
-        assert_eq!(
-            *cwd.expected_cwd.get_mut(),
-            Some(env::current_dir().unwrap())
-        );
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            assert_eq!(
+                *locked_cwd.expected_cwd.get_mut(),
+                None,
+                "test not run standalone"
+            );
+            locked_cwd.get().unwrap();
+            assert_eq!(
+                *locked_cwd.expected_cwd.get_mut(),
+                Some(env::current_dir().unwrap())
+            );
+        });
     }
 
     #[test]
     #[ignore = "Test needs to be run standalone"]
     fn test_set_inits_expected() {
         let test_dir = test_dir!();
-        let (_unused, mut cwd) = test_mutex(Cwd::mutex()).unwrap();
-
-        assert_eq!(*cwd.expected_cwd.get_mut(), None, "test not run standalone");
-        cwd.set(&*test_dir).unwrap();
-        assert_eq!(
-            cwd.expected_cwd.get_mut().as_deref(),
-            Some(test_dir.as_path())
-        );
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            assert_eq!(
+                *locked_cwd.expected_cwd.get_mut(),
+                None,
+                "test not run standalone"
+            );
+            locked_cwd.set(&*test_dir).unwrap();
+            assert_eq!(
+                locked_cwd.expected_cwd.get_mut().as_deref(),
+                Some(test_dir.as_path())
+            );
+        });
     }
 
     #[test]
     fn test_unexpected_set() {
         let test_dir = test_dir!("dir1");
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
-        let cwd = &mut **reset_cwd;
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+            let cwd = &mut **reset_cwd;
 
-        let initial_cwd = cwd.get().unwrap();
-        assert_eq!(cwd.get_expected().unwrap(), initial_cwd);
+            let initial_cwd = cwd.get().unwrap();
+            assert_eq!(cwd.get_expected().unwrap(), initial_cwd);
 
-        env::set_current_dir(&*test_dir).unwrap();
-        let expected_path = cwd.get_expected().unwrap();
-        let cwd_path = cwd.get().unwrap();
-        assert_ne!(cwd_path, expected_path);
-        assert_eq!(expected_path, initial_cwd);
-        assert_eq!(cwd_path, *test_dir);
+            env::set_current_dir(&*test_dir).unwrap();
+            let expected_path = cwd.get_expected().unwrap();
+            let cwd_path = cwd.get().unwrap();
+            assert_ne!(cwd_path, expected_path);
+            assert_eq!(expected_path, initial_cwd);
+            assert_eq!(cwd_path, *test_dir);
 
-        // test stable
-        let expected_path = cwd.get_expected().unwrap();
-        let cwd_path = cwd.get().unwrap();
-        assert_ne!(cwd_path, expected_path);
-        assert_eq!(expected_path, initial_cwd);
-        assert_eq!(cwd_path, *test_dir);
+            // test stable
+            let expected_path = cwd.get_expected().unwrap();
+            let cwd_path = cwd.get().unwrap();
+            assert_ne!(cwd_path, expected_path);
+            assert_eq!(expected_path, initial_cwd);
+            assert_eq!(cwd_path, *test_dir);
 
-        // set new expectation
-        cwd.set(test_dir.join("dir1")).unwrap();
-        let expected_path = cwd.get_expected().unwrap();
-        let cwd_path = cwd.get().unwrap();
-        assert_eq!(cwd_path, expected_path);
-        assert_eq!(expected_path, test_dir.join("dir1"));
-        assert_eq!(cwd_path, test_dir.join("dir1"));
+            // set new expectation
+            cwd.set(test_dir.join("dir1")).unwrap();
+            let expected_path = cwd.get_expected().unwrap();
+            let cwd_path = cwd.get().unwrap();
+            assert_eq!(cwd_path, expected_path);
+            assert_eq!(expected_path, test_dir.join("dir1"));
+            assert_eq!(cwd_path, test_dir.join("dir1"));
+        });
     }
 }
 
@@ -256,33 +266,36 @@ mod cwd_bench {
 
     #[bench]
     fn bench_get(b: &mut test::Bencher) {
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
-        let cwd = &mut **reset_cwd;
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+            let cwd = &mut **reset_cwd;
 
-        b.iter(|| cwd.get().unwrap())
+            b.iter(|| cwd.get().unwrap());
+        });
     }
 
     #[bench]
     fn bench_set(b: &mut test::Bencher) {
         let test_dir = test_dir!();
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
-        let cwd = &mut **reset_cwd;
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+            let cwd = &mut **reset_cwd;
 
-        b.iter(|| cwd.set(&*test_dir).unwrap())
+            b.iter(|| cwd.set(&*test_dir).unwrap());
+        });
     }
 
     #[bench]
     fn bench_set_and_get(b: &mut test::Bencher) {
         let test_dir = test_dir!();
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
-        let cwd = &mut **reset_cwd;
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+            let cwd = &mut **reset_cwd;
 
-        cwd.set(&*test_dir).unwrap();
+            cwd.set(&*test_dir).unwrap();
 
-        b.iter(|| cwd.set(cwd.get().unwrap()).unwrap())
+            b.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
+        });
     }
 }
 
@@ -369,51 +382,14 @@ mod guard_tests {
     #[test]
     fn test_guard_reset() {
         let test_dir = test_dir!();
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
-        let cwd = &mut **reset_cwd;
-        let initial_cwd = cwd.get().unwrap();
+            let cwd = &mut **reset_cwd;
+            let initial_cwd = cwd.get().unwrap();
 
-        assert_ne!(initial_cwd, *test_dir);
+            assert_ne!(initial_cwd, *test_dir);
 
-        let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
-        assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
-
-        cwd_guard.set(&*test_dir).unwrap();
-        assert_eq!(cwd_guard.get().unwrap(), *test_dir);
-
-        cwd_guard.reset().unwrap();
-        assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
-
-        cwd_guard.set(&*test_dir).unwrap();
-        assert_eq!(cwd_guard.get().unwrap(), *test_dir);
-
-        cwd_guard.reset().unwrap();
-        assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
-    }
-
-    #[test]
-    fn test_guard_drop() {
-        let test_dir = test_dir!();
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
-
-        let cwd = &mut **reset_cwd;
-        let initial_cwd = cwd.get().unwrap();
-
-        assert_ne!(initial_cwd, *test_dir);
-
-        {
-            let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
-            assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
-
-            cwd_guard.set(&*test_dir).unwrap();
-            assert_eq!(cwd_guard.get().unwrap(), *test_dir);
-        }
-        assert_eq!(cwd.get().unwrap(), initial_cwd);
-
-        {
             let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
             assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
 
@@ -422,33 +398,73 @@ mod guard_tests {
 
             cwd_guard.reset().unwrap();
             assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
-        }
-        assert_eq!(cwd.get().unwrap(), initial_cwd);
+
+            cwd_guard.set(&*test_dir).unwrap();
+            assert_eq!(cwd_guard.get().unwrap(), *test_dir);
+
+            cwd_guard.reset().unwrap();
+            assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
+        });
+    }
+
+    #[test]
+    fn test_guard_drop() {
+        let test_dir = test_dir!();
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+
+            let cwd = &mut **reset_cwd;
+            let initial_cwd = cwd.get().unwrap();
+
+            assert_ne!(initial_cwd, *test_dir);
+
+            {
+                let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
+                assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
+
+                cwd_guard.set(&*test_dir).unwrap();
+                assert_eq!(cwd_guard.get().unwrap(), *test_dir);
+            }
+            assert_eq!(cwd.get().unwrap(), initial_cwd);
+
+            {
+                let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
+                assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
+
+                cwd_guard.set(&*test_dir).unwrap();
+                assert_eq!(cwd_guard.get().unwrap(), *test_dir);
+
+                cwd_guard.reset().unwrap();
+                assert_eq!(cwd_guard.get().unwrap(), initial_cwd);
+            }
+            assert_eq!(cwd.get().unwrap(), initial_cwd);
+        });
     }
 
     #[test]
     fn test_guard_recursive() {
         let test_dir = test_dir!("dir1/dir2");
-        let (_unused, mut locked_cwd) = test_mutex(Cwd::mutex()).unwrap();
-        let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
-        let cwd = &mut **reset_cwd;
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
+            let cwd = &mut **reset_cwd;
 
-        let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
-        cwd_guard.set(&*test_dir).unwrap();
-        assert_eq!(cwd_guard.get().unwrap(), *test_dir);
-        {
-            let mut sub_cwd_guard = CwdGuard::try_from(&mut cwd_guard).unwrap();
-            assert_eq!(sub_cwd_guard.get().unwrap(), *test_dir);
-            sub_cwd_guard.set(test_dir.join("dir1")).unwrap();
-            assert_eq!(sub_cwd_guard.get().unwrap(), test_dir.join("dir1"));
+            let mut cwd_guard = CwdGuard::try_from(&mut *cwd).unwrap();
+            cwd_guard.set(&*test_dir).unwrap();
+            assert_eq!(cwd_guard.get().unwrap(), *test_dir);
             {
-                let mut sub_sub_cwd_guard = CwdGuard::try_from(&mut sub_cwd_guard).unwrap();
-                assert_eq!(sub_sub_cwd_guard.get().unwrap(), test_dir.join("dir1"));
-                sub_sub_cwd_guard.set(test_dir.join("dir1/dir2")).unwrap();
-                assert_eq!(sub_sub_cwd_guard.get().unwrap(), test_dir.join("dir1/dir2"));
+                let mut sub_cwd_guard = CwdGuard::try_from(&mut cwd_guard).unwrap();
+                assert_eq!(sub_cwd_guard.get().unwrap(), *test_dir);
+                sub_cwd_guard.set(test_dir.join("dir1")).unwrap();
+                assert_eq!(sub_cwd_guard.get().unwrap(), test_dir.join("dir1"));
+                {
+                    let mut sub_sub_cwd_guard = CwdGuard::try_from(&mut sub_cwd_guard).unwrap();
+                    assert_eq!(sub_sub_cwd_guard.get().unwrap(), test_dir.join("dir1"));
+                    sub_sub_cwd_guard.set(test_dir.join("dir1/dir2")).unwrap();
+                    assert_eq!(sub_sub_cwd_guard.get().unwrap(), test_dir.join("dir1/dir2"));
+                }
+                assert_eq!(sub_cwd_guard.get().unwrap(), test_dir.join("dir1"));
             }
-            assert_eq!(sub_cwd_guard.get().unwrap(), test_dir.join("dir1"));
-        }
-        assert_eq!(cwd_guard.get().unwrap(), *test_dir);
+            assert_eq!(cwd_guard.get().unwrap(), *test_dir);
+        });
     }
 }
