@@ -8,26 +8,17 @@
 )]
 #![allow(
     clippy::blanket_clippy_restriction_lints,
-    clippy::implicit_return,
-    clippy::question_mark_used,
-    clippy::redundant_else,
-    clippy::self_named_module_files,
-    clippy::semicolon_outside_block,
-    clippy::significant_drop_tightening, // false positive
-    clippy::single_call_fn, // Can't seem to override at instance
-    clippy::unseparated_literal_suffix,
-    clippy::wildcard_imports
+    clippy::implicit_return, // idiomatic
 )]
-#![doc(test(attr(
-    deny(warnings),
-    deny(
-        clippy::cargo,
-        clippy::pedantic,
-        clippy::restriction, // Easier to maintain an allow list for the time being
-        clippy::nursery,
-        rustdoc::all,
-    )
-)))]
+#![doc(test(attr(deny(
+    unused,
+    warnings,
+    clippy::cargo,
+    clippy::pedantic,
+    clippy::restriction, // Easier to maintain an allow list for the time being
+    clippy::nursery,
+    rustdoc::all,
+))))]
 #![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(all(feature = "unstable", feature = "nightly"), feature(test))]
@@ -37,8 +28,11 @@ use core::{
     fmt,
     ops::{Deref, DerefMut},
 };
+#[allow(clippy::useless_attribute)] // false positive
+#[allow(clippy::std_instead_of_core)] // false positive
+use std::env;
 use std::{
-    env, io,
+    io,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -72,7 +66,7 @@ macro_rules! mutex_test {
         mutex_test!($($args)+, core::time::Duration::from_millis(100))
     };
 }
-
+/// Allows cloning the contense of a [`Cell`] that implement [`Default`] and [`Clone`]
 fn clone_cell_value<T: Default + Clone>(cell: &Cell<T>) -> T {
     let value = cell.take();
     let clone = value.clone();
@@ -105,6 +99,7 @@ pub struct Cwd {
 }
 impl Cwd {
     /// Creates the shared memory used by [`CwdGuard`]
+    #[allow(clippy::single_call_fn)] // better readability
     const fn new() -> Self {
         Self {
             expected_cwd: Cell::new(None),
@@ -137,6 +132,7 @@ impl Cwd {
     /// Wrapper function to ensure [`env::current_dir()`] is called with the [`Cwd`] borrowed.
     #[inline]
     #[doc(alias = "current_dir")]
+    #[allow(clippy::missing_errors_doc)] // Wrapper function
     pub fn get(&self) -> io::Result<PathBuf> {
         env::current_dir().map(|path| {
             if cfg!(feature = "full_expected_cwd") && clone_cell_value(&self.expected_cwd).is_none()
@@ -150,6 +146,7 @@ impl Cwd {
     /// Wrapper function to ensure [`env::set_current_dir()`] is called with the [`Cwd`] borrowed.
     #[inline]
     #[doc(alias = "set_current_dir")]
+    #[allow(clippy::needless_pass_by_ref_mut, clippy::missing_errors_doc)] // Wrapper function
     pub fn set<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         env::set_current_dir(&path).map(|()| {
             if cfg!(feature = "full_expected_cwd") {
@@ -159,6 +156,7 @@ impl Cwd {
     }
 }
 impl fmt::Debug for Cwd {
+    #[inline]
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("Cwd")
             .field("expected_cwd", &clone_cell_value(&self.expected_cwd))
@@ -234,26 +232,27 @@ mod full_expected_cwd_tests {
             assert_eq!(cwd.get_expected().unwrap(), initial_cwd);
 
             env::set_current_dir(&*test_dir).unwrap();
-            let expected_path = cwd.get_expected().unwrap();
-            let cwd_path = cwd.get().unwrap();
-            assert_ne!(cwd_path, expected_path);
-            assert_eq!(expected_path, initial_cwd);
-            assert_eq!(cwd_path, *test_dir);
+            {
+                let expected_path = cwd.get_expected().unwrap();
+                let cwd_path = cwd.get().unwrap();
+                assert_ne!(cwd_path, expected_path);
+                assert_eq!(expected_path, initial_cwd);
+                assert_eq!(cwd_path, *test_dir);
 
-            // test stable
-            let expected_path = cwd.get_expected().unwrap();
-            let cwd_path = cwd.get().unwrap();
-            assert_ne!(cwd_path, expected_path);
-            assert_eq!(expected_path, initial_cwd);
-            assert_eq!(cwd_path, *test_dir);
+                // test stable
+                assert_eq!(cwd.get_expected().unwrap(), expected_path);
+                assert_eq!(cwd.get().unwrap(), *test_dir);
+            }
 
             // set new expectation
             cwd.set(test_dir.join("dir1")).unwrap();
-            let expected_path = cwd.get_expected().unwrap();
-            let cwd_path = cwd.get().unwrap();
-            assert_eq!(cwd_path, expected_path);
-            assert_eq!(expected_path, test_dir.join("dir1"));
-            assert_eq!(cwd_path, test_dir.join("dir1"));
+            {
+                let expected_path = cwd.get_expected().unwrap();
+                let cwd_path = cwd.get().unwrap();
+                assert_eq!(cwd_path, expected_path);
+                assert_eq!(expected_path, test_dir.join("dir1"));
+                assert_eq!(cwd_path, test_dir.join("dir1"));
+            }
         });
     }
 }
@@ -265,28 +264,28 @@ mod cwd_bench {
     use super::*;
 
     #[bench]
-    fn bench_get(b: &mut test::Bencher) {
+    fn bench_get(bencher: &mut test::Bencher) {
         mutex_test!(Cwd::mutex(), |mut locked_cwd| {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
             let cwd = &mut **reset_cwd;
 
-            b.iter(|| cwd.get().unwrap());
+            bencher.iter(|| cwd.get().unwrap());
         });
     }
 
     #[bench]
-    fn bench_set(b: &mut test::Bencher) {
+    fn bench_set(bencher: &mut test::Bencher) {
         let test_dir = test_dir!();
         mutex_test!(Cwd::mutex(), |mut locked_cwd| {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
             let cwd = &mut **reset_cwd;
 
-            b.iter(|| cwd.set(&*test_dir).unwrap());
+            bencher.iter(|| cwd.set(&*test_dir).unwrap());
         });
     }
 
     #[bench]
-    fn bench_set_and_get(b: &mut test::Bencher) {
+    fn bench_set_and_get(bencher: &mut test::Bencher) {
         let test_dir = test_dir!();
         mutex_test!(Cwd::mutex(), |mut locked_cwd| {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
@@ -294,7 +293,7 @@ mod cwd_bench {
 
             cwd.set(&*test_dir).unwrap();
 
-            b.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
+            bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
         });
     }
 }
@@ -327,7 +326,6 @@ impl Drop for CwdGuard<'_> {
     #[inline]
     fn drop(&mut self) {
         use std::panic;
-        #[allow(clippy::expect_used)]
         if let Err(err) = self.reset() {
             self.cwd.expected_cwd.set(Some(self.initial_cwd.clone()));
             panic::panic_any(err)
@@ -358,18 +356,19 @@ impl<'lock> TryFrom<&'lock mut Cwd> for CwdGuard<'lock> {
     /// The current directory cannot be retrieved as per [`env::current_dir()`]
     #[inline]
     fn try_from(cwd: &'lock mut Cwd) -> Result<Self, Self::Error> {
-        let initial_cwd = cwd.get()?;
-        Ok(Self { cwd, initial_cwd })
+        cwd.get().map(|initial_cwd| Self { cwd, initial_cwd })
     }
 }
 impl Deref for CwdGuard<'_> {
     type Target = Cwd;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         self.cwd
     }
 }
 impl DerefMut for CwdGuard<'_> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.cwd
     }
