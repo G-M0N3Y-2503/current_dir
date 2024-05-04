@@ -21,7 +21,7 @@
 ))))]
 #![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
 #![doc = include_str!("../README.md")]
-#![cfg_attr(all(feature = "unstable", feature = "nightly"), feature(test))]
+#![cfg_attr(all(feature = "unstable"), feature(test))]
 
 use core::{
     cell::Cell,
@@ -258,7 +258,7 @@ mod full_expected_cwd_tests {
 }
 
 #[cfg(test)]
-#[cfg(all(feature = "unstable", feature = "nightly"))]
+#[cfg(all(feature = "unstable"))]
 mod cwd_bench {
     extern crate test;
     use super::*;
