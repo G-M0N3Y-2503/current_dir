@@ -261,7 +261,7 @@ mod full_expected_cwd_tests {
 #[cfg(all(feature = "unstable"))]
 mod cwd_bench {
     extern crate test;
-    use super::*;
+    use {super::*, test::stats::Summary};
 
     #[bench]
     fn bench_get(bencher: &mut test::Bencher) {
@@ -269,7 +269,13 @@ mod cwd_bench {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
             let cwd = &mut **reset_cwd;
 
-            bencher.iter(|| cwd.get().unwrap());
+            assert!(matches!(
+                bencher
+                    .bench(|bencher| Ok(bencher.iter(|| cwd.get().unwrap())))
+                    .unwrap()
+                    .unwrap(),
+                Summary { mean: ..=650.0, .. }
+            ))
         });
     }
 
@@ -280,7 +286,16 @@ mod cwd_bench {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
             let cwd = &mut **reset_cwd;
 
-            bencher.iter(|| cwd.set(&*test_dir).unwrap());
+            assert!(matches!(
+                bencher
+                    .bench(|bencher| Ok(bencher.iter(|| cwd.set(&*test_dir).unwrap())))
+                    .unwrap()
+                    .unwrap(),
+                Summary {
+                    mean: ..=10050.0,
+                    ..
+                }
+            ))
         });
     }
 
@@ -293,7 +308,16 @@ mod cwd_bench {
 
             cwd.set(&*test_dir).unwrap();
 
-            bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
+            assert!(matches!(
+                bencher
+                    .bench(|bencher| Ok(bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap())))
+                    .unwrap()
+                    .unwrap(),
+                Summary {
+                    mean: ..=1750.0,
+                    ..
+                }
+            ))
         });
     }
 }
