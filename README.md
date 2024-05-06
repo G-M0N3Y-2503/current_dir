@@ -8,27 +8,32 @@ Otherwise, changing the current working directory without synchronising may lead
 
 ## [`Cwd`][Cwd] Example
 ```rust
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# use std::error::Error;
+# fn main() -> Result<(), Box<dyn Error>> {
+      use std::env::temp_dir;
       use current_dir::*;
 
       let mut locked_cwd = Cwd::mutex().lock()?;
-      locked_cwd.set(std::env::temp_dir())?;
+      locked_cwd.set(temp_dir())?;
       // cwd == /tmp
-#     assert_eq!(locked_cwd.get()?, std::env::temp_dir());
+#     assert_eq!(locked_cwd.get()?, temp_dir());
+#     drop(locked_cwd);
 #
 #     Ok(())
 # }
 ```
 or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`][current_dir] with a locked current working directory.
 ```rust
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-      use std::env;
+# use std::error::Error;
+# fn main() -> Result<(), Box<dyn Error>> {
+      use std::env::{set_current_dir, temp_dir};
       use current_dir::*;
 
       let locked_cwd = Cwd::mutex().lock()?;
-      env::set_current_dir(env::temp_dir())?;
+      set_current_dir(temp_dir())?;
       // cwd == /tmp
-#     assert_eq!(locked_cwd.get()?, env::temp_dir());
+#     assert_eq!(locked_cwd.get()?, temp_dir());
+#     drop(locked_cwd);
 #
 #     Ok(())
 # }
@@ -36,13 +41,14 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 
 ## [`CwdGuard`][CwdGuard] Example
 ```rust
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-      use std::env::temp_dir;
+# use std::error::Error;
+# fn main() -> Result<(), Box<dyn Error>> {
+      use std::{env::temp_dir, fs::create_dir_all};
       use current_dir::*;
 #
 #     let test_dirs = temp_dir().join("sub/sub");
 #     if !test_dirs.exists() {
-#         std::fs::create_dir_all(&test_dirs)?;
+#         create_dir_all(&test_dirs)?;
 #     }
 
       let mut locked_cwd = Cwd::mutex().lock()?;
@@ -73,6 +79,7 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
       }
       // cwd == /tmp
 #     assert_eq!(locked_cwd.get()?, temp_dir());
+#     drop(locked_cwd);
 #
 #     Ok(())
 # }
@@ -80,13 +87,19 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
 
 ## Poison cleanup Example
 ```rust
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# use std::error::Error;
+# fn main() -> Result<(), Box<dyn Error>> {
+      use std::{
+          env::temp_dir,
+          error::Error,
+          fs::{create_dir_all, remove_dir},
+          panic,
+      };
       use current_dir::*;
-      use std::{env::temp_dir, error::Error, fs, panic};
 
       let test_dir = temp_dir().join("cwd");
 #     if !test_dir.exists() {
-#         fs::create_dir(&test_dir)?;
+#         create_dir_all(&test_dir)?;
 #     }
 
       panic::catch_unwind(|| {
@@ -94,22 +107,25 @@ or you can just use [`set_current_dir()`][set_current_dir] and [`current_dir()`]
           locked_cwd.set(&test_dir)?;
 
           // removing the CWD before the CwdGuard is dropped will cause a panic on drop.
-          let _cwd_guard = CwdGuard::try_from(&mut *locked_cwd)?;
-          fs::remove_dir(&test_dir)?;
+          let cwd_guard = CwdGuard::try_from(&mut *locked_cwd)?;
+          remove_dir(&test_dir)?;
+          drop(cwd_guard);
 #
 #         Ok::<_, Box<dyn Error>>(())
-      }).expect_err("panicked");
+      })
+      .expect_err("panicked");
 
       let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
-      let expected_cwd = poisoned_locked_cwd.get_ref().get_expected().unwrap().to_owned();
-#     assert_eq!(expected_cwd, test_dir.clone());
+      let expected_cwd = poisoned_locked_cwd.get_ref().get_expected().unwrap();
+#     assert_eq!(expected_cwd, test_dir);
 
       // Fix poisoned cwd
-      fs::create_dir(&expected_cwd)?;
+      create_dir_all(&expected_cwd)?;
       poisoned_locked_cwd.get_mut().set(&expected_cwd)?;
       Cwd::mutex().clear_poison();
-      let _locked_cwd = poisoned_locked_cwd.into_inner();
-
+      let locked_cwd = poisoned_locked_cwd.into_inner();
+#     drop(locked_cwd);
+#
 #     Ok(())
 # }
 ```

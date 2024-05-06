@@ -1,25 +1,3 @@
-#![warn(
-    clippy::cargo,
-    clippy::pedantic,
-    clippy::restriction, // Easier to maintain an allow list for the time being
-    clippy::nursery,
-    missing_docs,
-    rustdoc::all,
-)]
-#![allow(
-    clippy::blanket_clippy_restriction_lints,
-    clippy::implicit_return, // idiomatic
-)]
-#![doc(test(attr(deny(
-    unused,
-    warnings,
-    clippy::cargo,
-    clippy::pedantic,
-    clippy::restriction, // Easier to maintain an allow list for the time being
-    clippy::nursery,
-    rustdoc::all,
-))))]
-#![cfg_attr(test, allow(clippy::panic, clippy::unwrap_used, clippy::expect_used))]
 #![doc = include_str!("../README.md")]
 #![cfg_attr(all(feature = "unstable"), feature(test))]
 
@@ -80,9 +58,9 @@ mod cell_test {
 
     #[test]
     fn test_clone_cell_value() {
-        let cell = Cell::new(Some(58i32));
-        assert_eq!(clone_cell_value(&cell), Some(58i32));
-        assert_eq!(cell, Cell::new(Some(58i32)));
+        let cell = Cell::new(Some(58_i32));
+        assert_eq!(clone_cell_value(&cell), Some(58_i32));
+        assert_eq!(cell, Cell::new(Some(58_i32)));
         cell.set(None);
         assert_eq!(clone_cell_value(&cell), None);
         assert_eq!(cell, Cell::new(None));
@@ -258,7 +236,8 @@ mod full_expected_cwd_tests {
 }
 
 #[cfg(test)]
-#[cfg(all(feature = "unstable"))]
+#[cfg(feature = "unstable")]
+#[allow(clippy::shadow_unrelated)]
 mod cwd_bench {
     extern crate test;
     use {super::*, test::stats::Summary};
@@ -271,11 +250,17 @@ mod cwd_bench {
 
             assert!(matches!(
                 bencher
-                    .bench(|bencher| Ok(bencher.iter(|| cwd.get().unwrap())))
+                    .bench(|bencher| {
+                        bencher.iter(|| cwd.get().unwrap());
+                        Ok(())
+                    })
                     .unwrap()
                     .unwrap(),
-                Summary { mean: ..=650.0, .. }
-            ))
+                Summary {
+                    mean: ..=650.0_f64,
+                    ..
+                }
+            ));
         });
     }
 
@@ -288,14 +273,17 @@ mod cwd_bench {
 
             assert!(matches!(
                 bencher
-                    .bench(|bencher| Ok(bencher.iter(|| cwd.set(&*test_dir).unwrap())))
+                    .bench(|bencher| {
+                        bencher.iter(|| cwd.set(&*test_dir).unwrap());
+                        Ok(())
+                    })
                     .unwrap()
                     .unwrap(),
                 Summary {
-                    mean: ..=10050.0,
+                    mean: ..=10_050.0_f64,
                     ..
                 }
-            ))
+            ));
         });
     }
 
@@ -310,14 +298,17 @@ mod cwd_bench {
 
             assert!(matches!(
                 bencher
-                    .bench(|bencher| Ok(bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap())))
+                    .bench(|bencher| {
+                        bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
+                        Ok(())
+                    })
                     .unwrap()
                     .unwrap(),
                 Summary {
-                    mean: ..=1750.0,
+                    mean: ..=1_750.0_f64,
                     ..
                 }
-            ))
+            ));
         });
     }
 }

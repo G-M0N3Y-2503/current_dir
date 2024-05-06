@@ -1,5 +1,8 @@
+#![cfg(test)]
+
+use core::{env, time::Duration};
 use current_dir::*;
-use std::{env, fs, panic, path::PathBuf, sync::OnceLock, time::Duration};
+use std::{fs, panic, path::PathBuf, sync::OnceLock};
 
 use crate::test_utilities::yield_lock_poisoned;
 
@@ -7,7 +10,6 @@ mod test_utilities {
     include!("../src/test_utilities.rs");
 }
 
-#[cfg(test)]
 macro_rules! mutex_test {
     ($test:block, $timeout:expr) => {
         assert!(
@@ -64,7 +66,7 @@ fn recursive_guards() {
             assert_eq!(cwd_guard.get().unwrap(), test_dir.join("sub"));
         }
         assert_eq!(cwd.get().unwrap(), *test_dir);
-    })
+    });
 }
 
 #[test]
@@ -73,6 +75,8 @@ fn clean_up_poisend() {
     let test_dir = rm_test_dir.as_path();
     let initial_dir = OnceLock::<PathBuf>::new();
     mutex_test!({
+        use std::io::Error;
+
         let panic = thread!(|| {
             let mut locked_cwd = yield_lock_poisoned(Cwd::mutex(), Duration::from_millis(100))
                 .expect("test acquired Cwd lock within 100ms");
@@ -87,14 +91,13 @@ fn clean_up_poisend() {
 
         let mut poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
         assert_eq!(
-            panic.downcast_ref::<std::io::Error>().unwrap().to_string(),
+            panic.downcast_ref::<Error>().unwrap().to_string(),
             "No such file or directory (os error 2)"
         );
         let expected_cwd = poisoned_locked_cwd
             .get_ref()
             .get_expected()
-            .expect("panic sets expected cwd")
-            .to_owned();
+            .expect("panic sets expected cwd");
         assert_eq!(expected_cwd, test_dir);
 
         // Fix poisoned cwd
@@ -112,6 +115,8 @@ fn clean_up_poisend() {
 fn sub_guard_drop_panic_exception_safe() {
     let rm_test_dir = test_dir!("sub/sub");
     mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+        use std::io::{Error, ErrorKind};
+
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
         let cwd = &mut **reset_cwd;
@@ -134,25 +139,24 @@ fn sub_guard_drop_panic_exception_safe() {
             })
             .expect_err("panicked");
             // test_dir/sub/sub is deleted too!
-            assert_eq!(
-                cwd_guard.get().unwrap_err().kind(),
-                std::io::ErrorKind::NotFound
-            );
+            assert_eq!(cwd_guard.get().unwrap_err().kind(), ErrorKind::NotFound);
             panic::resume_unwind(panic);
         })
         .expect_err("panicked");
         assert_eq!(
-            panic.downcast_ref::<std::io::Error>().unwrap().to_string(),
+            panic.downcast_ref::<Error>().unwrap().to_string(),
             "No such file or directory (os error 2)"
         );
         assert_eq!(cwd.get().unwrap(), *test_dir);
-    })
+    });
 }
 
 #[test]
 fn guard_drop_panic_dirty_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+        use std::io::Error;
+
         let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
 
         let cwd = &mut **reset_cwd;
@@ -171,19 +175,20 @@ fn guard_drop_panic_dirty_exception_safe() {
         })
         .expect_err("panicked");
         assert_eq!(
-            panic.downcast_ref::<std::io::Error>().unwrap().to_string(),
+            panic.downcast_ref::<Error>().unwrap().to_string(),
             "No such file or directory (os error 2)"
         );
         assert_eq!(cwd.get().unwrap(), *test_dir);
-        let expected_cwd = cwd.get_expected().unwrap().to_owned();
+        let expected_cwd = cwd.get_expected().unwrap();
         assert_eq!(*expected_cwd, test_dir.join("sub"));
-        fs::create_dir(&expected_cwd).unwrap();
+        fs::create_dir_all(&expected_cwd).unwrap();
         cwd.set(&expected_cwd).unwrap();
         assert_eq!(cwd.get().unwrap(), expected_cwd);
-    })
+    });
 }
 
 #[test]
+#[allow(clippy::panic)]
 fn external_panic_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     mutex_test!(Cwd::mutex(), |mut locked_cwd| {
@@ -205,18 +210,21 @@ fn external_panic_exception_safe() {
         .expect_err("panicked");
         assert_eq!(panic.downcast_ref(), Some(&"external panic"));
         assert_eq!(cwd.get().unwrap(), test_dir.join("sub"));
-    })
+    });
 }
 
 #[test]
+#[allow(clippy::panic)]
 fn external_panic_mutex_dropped_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     let test_dir = rm_test_dir.as_path();
     let initial_dir = OnceLock::<PathBuf>::new();
     mutex_test!({
+        use core::time::Duration;
+
         let panic = thread!(|| {
             let mut locked_cwd =
-                yield_lock_poisoned(Cwd::mutex(), std::time::Duration::from_millis(100)).unwrap();
+                yield_lock_poisoned(Cwd::mutex(), Duration::from_millis(100)).unwrap();
             let cwd = &mut *locked_cwd;
             initial_dir.set(cwd.get().unwrap()).unwrap();
 
