@@ -70,6 +70,7 @@ fn recursive_guards() {
 }
 
 #[test]
+#[allow(clippy::significant_drop_tightening)]
 fn clean_up_poisend() {
     let rm_test_dir = test_dir!();
     let test_dir = rm_test_dir.as_path();
@@ -84,8 +85,9 @@ fn clean_up_poisend() {
 
             // cause panic in `_cwd_guard` drop
             locked_cwd.set(test_dir).unwrap();
-            let _cwd_guard = CwdGuard::try_from(&mut *locked_cwd).unwrap();
+            let cwd_guard = CwdGuard::try_from(&mut *locked_cwd).unwrap();
             fs::remove_dir(test_dir).unwrap();
+            drop(cwd_guard);
         })
         .expect_err("panicked");
 
@@ -108,6 +110,7 @@ fn clean_up_poisend() {
         assert_eq!(locked_cwd.get_expected().unwrap(), expected_cwd);
 
         locked_cwd.set(initial_dir.get().unwrap()).unwrap();
+        drop(locked_cwd);
     });
 }
 
@@ -214,7 +217,7 @@ fn external_panic_exception_safe() {
 }
 
 #[test]
-#[allow(clippy::panic)]
+#[allow(clippy::panic, clippy::significant_drop_tightening)]
 fn external_panic_mutex_dropped_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     let test_dir = rm_test_dir.as_path();
@@ -253,5 +256,6 @@ fn external_panic_mutex_dropped_exception_safe() {
         assert_eq!(cwd.get().unwrap(), test_dir.join("sub"));
 
         cwd.set(initial_dir.get().unwrap()).unwrap();
+        drop(cwd);
     });
 }

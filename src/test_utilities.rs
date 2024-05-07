@@ -1,4 +1,7 @@
-use core::time::Duration;
+use core::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 use std::{
     env::temp_dir,
     panic,
@@ -180,11 +183,11 @@ macro_rules! mutex_block_timeout_10s {
 
 #[test]
 fn test_mutex_tests() {
-    static BLOCK_TEST: Mutex<bool> = Mutex::new(false);
+    static BLOCK_TEST: AtomicBool = AtomicBool::new(false);
     let t1 = thread::spawn(|| {
         mutex_block_timeout_10s!({
-            *BLOCK_TEST.lock().unwrap() = true;
-            while *BLOCK_TEST.lock().unwrap() {
+            BLOCK_TEST.store(true, Ordering::Relaxed);
+            while BLOCK_TEST.load(Ordering::Relaxed) {
                 yield_now();
             }
         })
@@ -192,19 +195,19 @@ fn test_mutex_tests() {
     });
 
     thread::spawn(|| {
-        let mut blocked = loop {
-            match BLOCK_TEST.lock().unwrap() {
-                blocked if *blocked => break blocked,
-                _ => yield_now(),
+        loop {
+            if BLOCK_TEST.load(Ordering::Acquire) {
+                break;
             }
-        };
+            yield_now();
+        }
 
         assert!(
             mutex_block!({}, Duration::from_nanos(1)).is_none(),
             "could not acquired mutual exclusion"
         );
 
-        *blocked = false;
+        BLOCK_TEST.store(false, Ordering::Release);
     })
     .join()
     .expect("thread didn't panicked");
@@ -242,6 +245,7 @@ fn test_reset_cwd() {
         };
 
         assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
+        drop(locked_cwd_guard);
     })
     .expect("acquired mutual exclusion");
 }
@@ -266,6 +270,7 @@ fn test_reset_cwd_panic() {
         assert_eq!(test_cwd_panic.downcast_ref(), Some(&"test panic"));
 
         assert_ne!(locked_cwd_guard.get().unwrap(), temp_dir());
+        drop(locked_cwd_guard);
     })
     .expect("acquired mutual exclusion");
 }
