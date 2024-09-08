@@ -1,7 +1,9 @@
 name: CI
 
 on:
-  push:
+  workflow_call:
+  schedule:
+    - cron: '0 0 1 * *' # on the 1st of every month
   pull_request:
     branches: [ "main" ]
 
@@ -16,17 +18,24 @@ jobs:
       matrix:
         toolchain: [stable, nightly]
         profile: [dev, release]
-        features: ["" , full_expected_cwd, unstable]
+        features: ["" , full_expected_cwd, unstable, "unstable,full_expected_cwd"]
+        exclude:
+          - features: unstable
+            toolchain: stable
+          - features: "unstable,full_expected_cwd"
+            toolchain: stable
     steps:
       - uses: actions/checkout@v4
-      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
-      - run: cargo build  --profile ${{ matrix.profile }} --no-default-features --features ${{ matrix.features }} --all-targets
-      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features --features ${{ matrix.features }}
-      - run: cargo clippy --profile ${{ matrix.profile }} --no-default-features --features ${{ matrix.features }} --all-targets
-      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features --features ${{ matrix.features }} -- --ignored full_expected_cwd_tests::test_get_expected_inits_expected
+      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }} && rustup component add clippy rustfmt
+      - run: cargo build  --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} --all-targets
+      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }}
+      - run: cargo clippy --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} --all-targets
+      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} -- --ignored full_expected_cwd_tests::test_get_expected_inits_expected
         if: ${{ contains( matrix.features, 'full_expected_cwd' ) }}
-      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features --features ${{ matrix.features }} -- --ignored full_expected_cwd_tests::test_get_inits_expected
+      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} -- --ignored full_expected_cwd_tests::test_get_inits_expected
         if: ${{ contains( matrix.features, 'full_expected_cwd' ) }}
-      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features --features ${{ matrix.features }} -- --ignored full_expected_cwd_tests::test_set_inits_expected
+      - run: cargo test   --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} -- --ignored full_expected_cwd_tests::test_set_inits_expected
         if: ${{ contains( matrix.features, 'full_expected_cwd' ) }}
+      - run: cargo bench  --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} --all-targets
+        if: ${{ contains( matrix.features, 'unstable' ) && matrix.toolchain == 'nightly' && matrix.profile == 'release' }}
       - run: cargo fmt --check --all
