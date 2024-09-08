@@ -70,7 +70,10 @@ fn recursive_guards() {
 }
 
 #[test]
-#[allow(clippy::significant_drop_tightening)]
+#[expect(
+    clippy::significant_drop_tightening,
+    reason = "lint doesn't detect move"
+)]
 fn clean_up_poisend() {
     let rm_test_dir = test_dir!();
     let test_dir = rm_test_dir.as_path();
@@ -191,7 +194,7 @@ fn guard_drop_panic_dirty_exception_safe() {
 }
 
 #[test]
-#[allow(clippy::panic)]
+#[expect(clippy::panic, reason = "exception test")]
 fn external_panic_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     mutex_test!(Cwd::mutex(), |mut locked_cwd| {
@@ -217,7 +220,7 @@ fn external_panic_exception_safe() {
 }
 
 #[test]
-#[allow(clippy::panic, clippy::significant_drop_tightening)]
+#[expect(clippy::panic, reason = "exception test")]
 fn external_panic_mutex_dropped_exception_safe() {
     let rm_test_dir = test_dir!("sub");
     let test_dir = rm_test_dir.as_path();
@@ -226,9 +229,7 @@ fn external_panic_mutex_dropped_exception_safe() {
         use core::time::Duration;
 
         let panic = thread!(|| {
-            let mut locked_cwd =
-                yield_lock_poisoned(Cwd::mutex(), Duration::from_millis(100)).unwrap();
-            let cwd = &mut *locked_cwd;
+            let cwd = &mut *yield_lock_poisoned(Cwd::mutex(), Duration::from_millis(100)).unwrap();
             initial_dir.set(cwd.get().unwrap()).unwrap();
 
             cwd.set(test_dir.join("sub")).unwrap();
@@ -250,9 +251,8 @@ fn external_panic_mutex_dropped_exception_safe() {
         .expect_err("panicked");
         assert_eq!(panic.downcast_ref(), Some(&"external panic"));
 
-        let poisoned_locked_cwd = Cwd::mutex().lock().expect_err("cwd poisoned");
+        let mut cwd = Cwd::mutex().lock().expect_err("cwd poisoned").into_inner();
         Cwd::mutex().clear_poison();
-        let mut cwd = poisoned_locked_cwd.into_inner();
         assert_eq!(cwd.get().unwrap(), test_dir.join("sub"));
 
         cwd.set(initial_dir.get().unwrap()).unwrap();

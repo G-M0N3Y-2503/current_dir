@@ -3,7 +3,7 @@
 use super::{Cwd, CwdGuard};
 
 /// Trait to protect against downstream implementations.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Designed to prevent use")]
 pub trait Sealed {}
 impl Sealed for Cwd {}
 impl Sealed for CwdGuard<'_> {}

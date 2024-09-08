@@ -52,7 +52,7 @@ macro_rules! thread {
 }
 
 #[test]
-#[allow(clippy::panic)]
+#[expect(clippy::panic, reason = "testing panic behaviour")]
 fn test_thread() {
     assert_eq!(thread!(|| { Ok::<(), ()>(()) }).unwrap(), Ok(()));
 
@@ -145,7 +145,7 @@ fn test_test_dir() {
     assert!(!test_dir_with_subs_2_path.exists());
 }
 
-#[allow(clippy::single_call_fn)]
+#[expect(clippy::single_call_fn, reason = "readability and logical separation")]
 pub fn try_lock_poisoned<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
     match mutex.try_lock() {
         Ok(locked_mutex) => Some(locked_mutex),
@@ -251,7 +251,7 @@ fn test_reset_cwd() {
 }
 
 #[test]
-#[allow(clippy::panic)]
+#[expect(clippy::panic, reason = "testing panic behaviour")]
 fn test_reset_cwd_panic() {
     mutex_block_timeout_10s!({
         let mut locked_cwd_guard =

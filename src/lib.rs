@@ -1,13 +1,12 @@
 #![doc = include_str!("../README.md")]
-#![cfg_attr(all(feature = "unstable"), feature(test))]
+#![cfg_attr(feature = "unstable", feature(test))]
 
 use core::{
     cell::Cell,
     fmt,
     ops::{Deref, DerefMut},
 };
-#[allow(clippy::useless_attribute)] // false positive
-#[allow(clippy::std_instead_of_core)] // false positive
+#[expect(clippy::useless_attribute, reason = "false positive")]
 use std::env;
 use std::{
     io,
@@ -77,7 +76,7 @@ pub struct Cwd {
 }
 impl Cwd {
     /// Creates the shared memory used by [`CwdGuard`]
-    #[allow(clippy::single_call_fn)] // better readability
+    #[expect(clippy::single_call_fn, reason = "better readability")]
     const fn new() -> Self {
         Self {
             expected_cwd: Cell::new(None),
@@ -110,21 +109,20 @@ impl Cwd {
     /// Wrapper function to ensure [`env::current_dir()`] is called with the [`Cwd`] borrowed.
     #[inline]
     #[doc(alias = "current_dir")]
-    #[allow(clippy::missing_errors_doc)] // Wrapper function
+    #[expect(clippy::missing_errors_doc, reason = "Wrapper function")]
     pub fn get(&self) -> io::Result<PathBuf> {
-        env::current_dir().map(|path| {
+        env::current_dir().inspect(|path| {
             if cfg!(feature = "full_expected_cwd") && clone_cell_value(&self.expected_cwd).is_none()
             {
                 self.expected_cwd.set(Some(path.clone()));
-            };
-            path
+            }
         })
     }
 
     /// Wrapper function to ensure [`env::set_current_dir()`] is called with the [`Cwd`] borrowed.
     #[inline]
     #[doc(alias = "set_current_dir")]
-    #[allow(clippy::needless_pass_by_ref_mut, clippy::missing_errors_doc)] // Wrapper function
+    #[expect(clippy::missing_errors_doc, reason = "Wrapper function")]
     pub fn set<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         env::set_current_dir(&path).map(|()| {
             if cfg!(feature = "full_expected_cwd") {
@@ -135,8 +133,9 @@ impl Cwd {
 }
 impl fmt::Debug for Cwd {
     #[inline]
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("Cwd")
+    #[expect(clippy::min_ident_chars, reason = "Default paramater name")]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Cwd")
             .field("expected_cwd", &clone_cell_value(&self.expected_cwd))
             .finish()
     }
@@ -237,7 +236,6 @@ mod full_expected_cwd_tests {
 
 #[cfg(test)]
 #[cfg(feature = "unstable")]
-#[allow(clippy::shadow_unrelated)]
 mod cwd_bench {
     extern crate test;
     use {super::*, test::stats::Summary};
@@ -248,19 +246,30 @@ mod cwd_bench {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
             let cwd = &mut **reset_cwd;
 
-            assert!(matches!(
-                bencher
-                    .bench(|bencher| {
-                        bencher.iter(|| cwd.get().unwrap());
-                        Ok(())
-                    })
-                    .unwrap()
-                    .unwrap(),
-                Summary {
-                    mean: ..=650.0_f64,
-                    ..
-                }
-            ));
+            if let Some(summary) = bencher
+                .bench(|get_bencher| {
+                    get_bencher.iter(|| cwd.get().unwrap());
+                    Ok(())
+                })
+                .unwrap()
+            {
+                const MAX_DURATION: f64 = if cfg!(feature = "full_expected_cwd") {
+                    640.0
+                } else {
+                    620.0
+                };
+                assert!(
+                    matches!(
+                        summary,
+                        Summary {
+                            mean: ..=MAX_DURATION,
+                            ..
+                        }
+                    ),
+                    "assert {} <= {MAX_DURATION} failed",
+                    summary.mean
+                );
+            }
         });
     }
 
@@ -271,19 +280,30 @@ mod cwd_bench {
             let mut reset_cwd = test_utilities::reset_cwd(&mut locked_cwd);
             let cwd = &mut **reset_cwd;
 
-            assert!(matches!(
-                bencher
-                    .bench(|bencher| {
-                        bencher.iter(|| cwd.set(&*test_dir).unwrap());
-                        Ok(())
-                    })
-                    .unwrap()
-                    .unwrap(),
-                Summary {
-                    mean: ..=10_050.0_f64,
-                    ..
-                }
-            ));
+            if let Some(summary) = bencher
+                .bench(|set_bencher| {
+                    set_bencher.iter(|| cwd.set(&*test_dir).unwrap());
+                    Ok(())
+                })
+                .unwrap()
+            {
+                const MAX_DURATION: f64 = if cfg!(feature = "full_expected_cwd") {
+                    1_060.0
+                } else {
+                    1_020.0
+                };
+                assert!(
+                    matches!(
+                        summary,
+                        Summary {
+                            mean: ..=MAX_DURATION,
+                            ..
+                        }
+                    ),
+                    "assert {} <= {MAX_DURATION} failed",
+                    summary.mean
+                );
+            }
         });
     }
 
@@ -296,19 +316,30 @@ mod cwd_bench {
 
             cwd.set(&*test_dir).unwrap();
 
-            assert!(matches!(
-                bencher
-                    .bench(|bencher| {
-                        bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
-                        Ok(())
-                    })
-                    .unwrap()
-                    .unwrap(),
-                Summary {
-                    mean: ..=1_750.0_f64,
-                    ..
-                }
-            ));
+            if let Some(summary) = bencher
+                .bench(|get_set_bencher| {
+                    get_set_bencher.iter(|| cwd.set(cwd.get().unwrap()).unwrap());
+                    Ok(())
+                })
+                .unwrap()
+            {
+                const MAX_DURATION: f64 = if cfg!(feature = "full_expected_cwd") {
+                    1_680.0
+                } else {
+                    1_650.0
+                };
+                assert!(
+                    matches!(
+                        summary,
+                        Summary {
+                            mean: ..=MAX_DURATION,
+                            ..
+                        }
+                    ),
+                    "assert {} <= {MAX_DURATION} failed",
+                    summary.mean
+                );
+            }
         });
     }
 }
