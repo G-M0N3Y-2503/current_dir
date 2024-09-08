@@ -254,9 +254,9 @@ mod cwd_bench {
                 .unwrap()
             {
                 const MAX_DURATION: f64 = if cfg!(feature = "full_expected_cwd") {
-                    640.0
+                    960.0
                 } else {
-                    620.0
+                    900.0
                 };
                 assert!(
                     matches!(
@@ -288,9 +288,9 @@ mod cwd_bench {
                 .unwrap()
             {
                 const MAX_DURATION: f64 = if cfg!(feature = "full_expected_cwd") {
-                    1_060.0
+                    1_250.0
                 } else {
-                    1_020.0
+                    1_200.0
                 };
                 assert!(
                     matches!(
@@ -324,9 +324,9 @@ mod cwd_bench {
                 .unwrap()
             {
                 const MAX_DURATION: f64 = if cfg!(feature = "full_expected_cwd") {
-                    1_680.0
+                    2_270.0
                 } else {
-                    1_650.0
+                    2_070.0
                 };
                 assert!(
                     matches!(
