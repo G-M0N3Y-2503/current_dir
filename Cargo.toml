@@ -9,6 +9,7 @@ license = "MIT"
 readme = "README.md"
 keywords = ["async", "cwd", "filesystem", "test", "thread"]
 categories = ["concurrency", "development-tools::testing", "filesystem"]
+rust-version = "1.81"
 
 [features]
 full_expected_cwd = []
