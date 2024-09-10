@@ -1,6 +1,6 @@
 [package]
 name = "current_dir"
-version = "0.1.0"
+version = "0.1.1"
 description = "Thread Safe Current Working Directory"
 edition = "2021"
 repository = "https://github.com/G-M0N3Y-2503/current_dir"
