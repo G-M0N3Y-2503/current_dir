@@ -43,3 +43,4 @@ jobs:
       - run: cargo bench  --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} --all-targets
         if: ${{ contains( matrix.features, 'unstable' ) && matrix.toolchain == 'nightly' && matrix.profile == 'release' }}
       - run: cargo fmt --check --all
+      - run: cargo publish --dry-run

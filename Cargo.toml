@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Thread Safe Current Working Directory"
 edition = "2021"
 repository = "https://github.com/G-M0N3Y-2503/current_dir"
-license-file = "LICENSE"
 license = "MIT"
 readme = "README.md"
 keywords = ["async", "cwd", "filesystem", "test", "thread"]
