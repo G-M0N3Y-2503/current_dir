@@ -167,13 +167,13 @@ pub fn yield_lock_poisoned<T>(mutex: &Mutex<T>, timeout: Duration) -> Option<Mut
 }
 
 pub static STATIC_MUTEX: Mutex<()> = Mutex::new(());
-#[macro_export]
 macro_rules! mutex_block {
     ($block:block, $timeout:expr) => {
         test_utilities::yield_lock_poisoned(&test_utilities::STATIC_MUTEX, $timeout)
             .map(|_lock| $block)
     };
 }
+pub(super) use mutex_block;
 
 macro_rules! mutex_block_timeout_10s {
     ($block:block) => {

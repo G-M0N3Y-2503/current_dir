@@ -1,3 +1,4 @@
+//! Intergration Tests
 #![cfg(test)]
 
 use core::{env, time::Duration};
@@ -9,6 +10,7 @@ use crate::test_utilities::yield_lock_poisoned;
 mod test_utilities {
     include!("../src/test_utilities.rs");
 }
+use test_utilities::mutex_block;
 
 macro_rules! mutex_test {
     ($test:block, $timeout:expr) => {

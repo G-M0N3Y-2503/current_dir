@@ -18,6 +18,8 @@ mod sealed;
 
 #[cfg(test)]
 mod test_utilities;
+#[cfg(test)]
+use test_utilities::mutex_block;
 
 #[cfg(test)]
 macro_rules! mutex_test {
@@ -374,6 +376,9 @@ impl Drop for CwdGuard<'_> {
         use std::panic;
         if let Err(err) = self.reset() {
             self.cwd.expected_cwd.set(Some(self.initial_cwd.clone()));
+            #[expect(clippy::allow_attributes, reason = "lint can't be expected")]
+            #[allow(unfulfilled_lint_expectations, reason = "false positive")]
+            #[expect(clippy::panic, reason = "exception safe, so is recoverable")]
             panic::panic_any(err)
         }
     }
