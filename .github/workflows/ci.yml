@@ -4,9 +4,10 @@ on:
   workflow_call:
   schedule:
     - cron: '0 0 1 * *' # on the 1st of every month
+  push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-    types: [ "opened", "closed", "reopened", "synchronize" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -45,4 +46,3 @@ jobs:
         if: ${{ contains( matrix.features, 'unstable' ) && matrix.toolchain == 'nightly' && matrix.profile == 'release' }}
       - run: cargo fmt --check --all
       - run: cargo publish --dry-run
-    if: ${{ !(github.event.pull_request.state == 'closed' && !github.event.pull_request.merged) }}
