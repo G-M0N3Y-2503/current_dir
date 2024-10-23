@@ -1,6 +1,6 @@
 # `current_dir`
 [![Crates.io Version](https://img.shields.io/crates/v/current_dir)](https://crates.io/crates/current_dir)
-[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/G-M0N3Y-2503/current_dir/ci?branch=main)](https://github.com/G-M0N3Y-2503/current_dir/actions?query=branch%3Amain)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/G-M0N3Y-2503/current_dir/ci.yml?branch=main)](https://github.com/G-M0N3Y-2503/current_dir/actions?query=branch%3Amain)
 [![docs.rs](https://img.shields.io/docsrs/current_dir)](https://docs.rs/current_dir/)
 
 A utility crate that helps using [`set_current_dir()`][set_current_dir] and [`current_dir()`][current_dir] in a thread safe manner.<br>
