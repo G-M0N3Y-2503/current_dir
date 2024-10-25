@@ -32,5 +32,5 @@ features = "full_expected_cwd"
 args = ["--ignored", "full_expected_cwd_tests::test_set_inits_expected"]
 
 [report]
-fail-under = 86
+fail-under = 100
 out = ["Lcov", "Stdout", "Html"]

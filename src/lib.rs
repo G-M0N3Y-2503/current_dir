@@ -22,29 +22,35 @@ mod test_utilities;
 use test_utilities::mutex_block;
 
 #[cfg(test)]
-macro_rules! mutex_test {
-    ($mutex:expr, $test:expr, $timeout:expr) => {
-        assert!(
-            mutex_block!(
-                {
-                    assert!(
-                        test_utilities::yield_lock_poisoned($mutex, $timeout)
-                            .map($test)
-                            .is_some(),
-                        "test acquired Cwd lock within {}s",
-                        $timeout.as_secs_f64()
-                    )
-                },
-                $timeout
-            ).is_some(),
-            "test acquired mutual exclusion within {}s",
-            $timeout.as_secs()
-        )
-    };
-    ($($args:tt)+) => {
-        mutex_test!($($args)+, core::time::Duration::from_millis(100))
-    };
+mod cwd_test_utilities {
+    macro_rules! mutex_test {
+        ($mutex:expr, $test:expr, $timeout:expr) => {
+            assert!(
+                mutex_block!(
+                    {
+                        assert!(
+                            test_utilities::yield_lock_poisoned($mutex, $timeout)
+                                .map($test)
+                                .is_some(),
+                            "test acquired Cwd lock within {}s",
+                            $timeout.as_secs_f64()
+                        )
+                    },
+                    $timeout
+                ).is_some(),
+                "test acquired mutual exclusion within {}s",
+                $timeout.as_secs()
+            )
+        };
+        ($($args:tt)+) => {
+            mutex_test!($($args)+, core::time::Duration::from_millis(100))
+        };
+    }
+    pub(super) use mutex_test;
 }
+#[cfg(test)]
+use cwd_test_utilities::mutex_test;
+
 /// Allows cloning the contense of a [`Cell`] that implement [`Default`] and [`Clone`]
 fn clone_cell_value<T: Default + Clone>(cell: &Cell<T>) -> T {
     let value = cell.take();
@@ -78,7 +84,10 @@ pub struct Cwd {
 }
 impl Cwd {
     /// Creates the shared memory used by [`CwdGuard`]
-    #[expect(clippy::single_call_fn, reason = "better readability")]
+    #[cfg_attr(
+        not(test),
+        expect(clippy::single_call_fn, reason = "better readability")
+    )]
     const fn new() -> Self {
         Self {
             expected_cwd: Cell::new(None),
@@ -268,6 +277,11 @@ mod cwd_tests {
         let debug_fmt = format!("{cwd:?}");
         assert!(debug_fmt.contains("expected_cwd"), "{debug_fmt}");
         assert!(debug_fmt.contains("\"./some/directory/\""), "{debug_fmt}");
+    }
+
+    #[test]
+    fn tarpaulin_const_fn_workaround() {
+        let _cwd = Cwd::new();
     }
 }
 
