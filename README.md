@@ -2,6 +2,7 @@
 [![Crates.io Version](https://img.shields.io/crates/v/current_dir)](https://crates.io/crates/current_dir)
 [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/G-M0N3Y-2503/current_dir/ci.yml?branch=main)](https://github.com/G-M0N3Y-2503/current_dir/actions?query=branch%3Amain)
 [![docs.rs](https://img.shields.io/docsrs/current_dir)](https://docs.rs/current_dir/)
+[![Code Coverage Minimum](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FG-M0N3Y-2503%2Fcurrent_dir%2Fmain%2Ftarpaulin.toml&query=%24.report.fail-under&suffix=%25&label=coverage)](https://github.com/G-M0N3Y-2503/current_dir/blob/main/tarpaulin.toml)
 
 A utility crate that helps using [`set_current_dir()`][set_current_dir] and [`current_dir()`][current_dir] in a thread safe manner.<br>
 This is generally useful for `#[test]`s that depend on different current working directories each as they are run in multiple threads by default.

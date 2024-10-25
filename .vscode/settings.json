@@ -1,0 +1,8 @@
+{
+    "rust-analyzer.check.features": [
+        "full_expected_cwd"
+    ],
+    "rust-analyzer.cargo.features": [
+        "full_expected_cwd"
+    ],
+}

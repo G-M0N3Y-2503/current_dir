@@ -144,6 +144,26 @@ impl fmt::Debug for Cwd {
 }
 
 #[cfg(test)]
+#[cfg(not(feature = "full_expected_cwd"))]
+mod expected_cwd_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "Test needs to be run standalone"]
+    fn test_get_expected_does_nothing() {
+        mutex_test!(Cwd::mutex(), |mut locked_cwd| {
+            assert_eq!(
+                *locked_cwd.expected_cwd.get_mut(),
+                None,
+                "test may not be run standalone"
+            );
+            assert_eq!(locked_cwd.get_expected(), None,);
+            assert_eq!(locked_cwd.get_expected(), None,);
+        });
+    }
+}
+
+#[cfg(test)]
 #[cfg(feature = "full_expected_cwd")]
 mod full_expected_cwd_tests {
     use super::*;
@@ -233,6 +253,21 @@ mod full_expected_cwd_tests {
                 assert_eq!(cwd_path, test_dir.join("dir1"));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod cwd_tests {
+    use {super::*, core::str::FromStr as _};
+
+    #[test]
+    fn test_cwd_debug_format_contains_expected_cwd() {
+        let cwd = Cwd {
+            expected_cwd: Cell::new(Some(PathBuf::from_str("./some/directory/").unwrap())),
+        };
+        let debug_fmt = format!("{cwd:?}");
+        assert!(debug_fmt.contains("expected_cwd"), "{debug_fmt}");
+        assert!(debug_fmt.contains("\"./some/directory/\""), "{debug_fmt}");
     }
 }
 
