@@ -46,3 +46,17 @@ jobs:
         if: ${{ contains( matrix.features, 'unstable' ) && matrix.toolchain == 'nightly' && matrix.profile == 'release' }}
       - run: cargo fmt --check --all
       - run: cargo publish --dry-run
+
+  coverage:
+    runs-on: ubuntu-latest
+    container:
+      image: xd009642/tarpaulin:latest-slim
+      options: --security-opt seccomp=unconfined
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable
+      - run: cargo tarpaulin --verbose
+      - uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage-report
+          path: tarpaulin-report.html

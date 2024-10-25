@@ -1,0 +1,36 @@
+
+[default_features_coverage]
+engine = "Llvm"
+
+[full_expected_cwd_feature_coverage]
+engine = "Llvm"
+features = "full_expected_cwd"
+
+[exception_coverage]
+engine = "Ptrace"
+args = ["guard_drop_panic_dirty_exception_safe"]
+
+[test_get_expected_does_nothing_coverage]
+engine = "Llvm"
+args = ["--ignored", "expected_cwd_tests::test_get_expected_does_nothing"]
+
+[test_get_expected_inits_expected_coverage]
+engine = "Llvm"
+features = "full_expected_cwd"
+args = [
+    "--ignored",
+    "full_expected_cwd_tests::test_get_expected_inits_expected",
+]
+
+[test_get_inits_expected_coverage]
+engine = "Llvm"
+features = "full_expected_cwd"
+args = ["--ignored", "full_expected_cwd_tests::test_get_inits_expected"]
+
+[test_set_inits_expected_coverage]
+features = "full_expected_cwd"
+args = ["--ignored", "full_expected_cwd_tests::test_set_inits_expected"]
+
+[report]
+fail-under = 86
+out = ["Lcov", "Stdout", "Html"]
