@@ -45,7 +45,7 @@ jobs:
       - run: cargo bench  --profile ${{ matrix.profile }} --no-default-features ${{ matrix.features != '' && '--features' || '' }} ${{ matrix.features }} --all-targets
         if: ${{ contains( matrix.features, 'unstable' ) && matrix.toolchain == 'nightly' && matrix.profile == 'release' }}
       - run: cargo fmt --check --all
-      - run: cargo publish --dry-run
+      - run: cargo publish --dry-run || echo "::error file=Cargo.toml,line=3,col=11,title=Publish check failed!::Does the version need to be updated?"
 
   coverage:
     runs-on: ubuntu-latest
